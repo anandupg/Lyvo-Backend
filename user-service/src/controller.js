@@ -7,7 +7,12 @@ const jwt = require('jsonwebtoken');
 const sgMail = require('@sendgrid/mail');
 const crypto = require('crypto');
 const { OAuth2Client } = require('google-auth-library');
-sgMail.setApiKey(process.env.SENDGRID_API_KEY); // Store your key in .env
+// Configure SendGrid
+if (process.env.SENDGRID_API_KEY) {
+    sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+} else {
+    console.warn('SENDGRID_API_KEY not found. Email verification will not work.');
+}
 
 // Initialize Google OAuth client
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
@@ -52,60 +57,104 @@ const registerUser = async (req, res) => {
         // Create verification link
         const verificationLink = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/verify-email?token=${verificationToken}`;
 
-        // Send verification email
+                // Send verification email
         const msg = {
             to: email,
-            from: process.env.SENDGRID_FROM_EMAIL,
-            subject: 'Verify Your MoodBites Account',
-            text: `Please verify your account by clicking this link: ${verificationLink}`,
+            from: process.env.SENDGRID_FROM_EMAIL || 'noreply@lyvo.com',
+            subject: 'Email Verification - Lyvo',
+            text: `Hello ${name}, thank you for registering with us! Please verify your email address by clicking this link: ${verificationLink}`,
             html: `
-                <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-                    <div style="background: linear-gradient(135deg, #F10100, #FFD122); padding: 30px; text-align: center; border-radius: 10px 10px 0 0;">
-                        <h1 style="color: white; margin: 0; font-size: 28px;">🍽️ MoodBites</h1>
-                        <p style="color: white; margin: 10px 0 0 0; font-size: 16px;">Welcome to the community!</p>
-                    </div>
-                    <div style="background: white; padding: 30px; border-radius: 0 0 10px 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
-                        <h2 style="color: #333; margin-bottom: 20px;">Verify Your Email Address</h2>
-                        <p style="color: #666; line-height: 1.6; margin-bottom: 25px;">
-                            Hi ${name},<br><br>
-                            Thank you for signing up for MoodBites! To complete your registration and start your journey with AI-powered, emotion-aware food recommendations, please verify your email address.
+                <!DOCTYPE html>
+                <html lang="en">
+                <head>
+                    <meta charset="UTF-8">
+                    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                    <title>Verify Your Email</title>
+                    <style>
+                        body {
+                            font-family: Arial, sans-serif;
+                            background-color: #f4f4f4;
+                            margin: 0;
+                            padding: 0;
+                        }
+                        .container {
+                            max-width: 600px;
+                            margin: 40px auto;
+                            background-color: #ffffff;
+                            border-radius: 8px;
+                            padding: 30px;
+                            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+                            color: #333333;
+                        }
+                        h2 {
+                            color: #4CAF50;
+                            text-align: center;
+                        }
+                        p {
+                            font-size: 16px;
+                        }
+                        .btn {
+                            display: inline-block;
+                            margin: 20px auto;
+                            padding: 12px 25px;
+                            background-color: #4CAF50;
+                            color: white;
+                            text-decoration: none;
+                            border-radius: 5px;
+                            font-weight: bold;
+                            text-align: center;
+                        }
+                        .footer {
+                            text-align: center;
+                            font-size: 12px;
+                            color: #888888;
+                            margin-top: 20px;
+                        }
+                    </style>
+                </head>
+                <body>
+                    <div class="container">
+                        <h2>Email Verification</h2>
+                        <p>Hello <strong>${name}</strong>,</p>
+                        <p>Thank you for registering with us! Please verify your email address by clicking the button below:</p>
+                        <p style="text-align:center;">
+                            <a class="btn" href="${verificationLink}">Verify Email</a>
                         </p>
-                        <div style="text-align: center; margin: 30px 0;">
-                            <a href="${verificationLink}" 
-                               style="
-                                   display: inline-block;
-                                   padding: 15px 30px;
-                                   background: linear-gradient(135deg, #F10100, #FFD122);
-                                   color: white;
-                                   text-decoration: none;
-                                   border-radius: 25px;
-                                   font-weight: bold;
-                                   font-size: 16px;
-                                   box-shadow: 0 4px 15px rgba(241, 1, 0, 0.3);
-                                   transition: all 0.3s ease;
-                               "
-                               onmouseover="this.style.transform='translateY(-2px)'; this.style.boxShadow='0 6px 20px rgba(241, 1, 0, 0.4)'"
-                               onmouseout="this.style.transform='translateY(0)'; this.style.boxShadow='0 4px 15px rgba(241, 1, 0, 0.3)'"
-                            >
-                                Verify Email Address
-                            </a>
+                        <p>If you did not create an account, please ignore this email.</p>
+                        <div class="footer">
+                            &copy; ${new Date().getFullYear()} Lyvo. All rights reserved.
                         </div>
-                        <p style="color: #666; line-height: 1.6; margin-bottom: 15px;">
-                            If the button doesn't work, you can copy and paste this link into your browser:
-                        </p>
-                        <p style="color: #F10100; word-break: break-all; font-size: 14px; background: #f8f9fa; padding: 10px; border-radius: 5px;">
-                            ${verificationLink}
-                        </p>
-                        <hr style="border: none; border-top: 1px solid #eee; margin: 25px 0;">
-                        <p style="color: #999; font-size: 14px; margin: 0;">
-                            This verification link will expire in 24 hours. If you didn't create an account with MoodBites, you can safely ignore this email.
-                        </p>
                     </div>
-                </div>
+                </body>
+                </html>
             `,
         };
 
-        await sgMail.send(msg);
+        // Try to send verification email
+        try {
+            console.log('Attempting to send email to:', email);
+            console.log('SendGrid API Key configured:', !!process.env.SENDGRID_API_KEY);
+            console.log('From email:', process.env.SENDGRID_FROM_EMAIL || 'noreply@lyvo.com');
+            
+            await sgMail.send(msg);
+            console.log('Email sent successfully to:', email);
+        } catch (emailError) {
+            console.error('SendGrid error:', emailError);
+            
+            // If SendGrid fails, still create the user but inform about email issue
+            res.status(201).json({ 
+                message: 'Registration successful! Please check your email and click the verification link to complete your registration.',
+                user: {
+                    _id: user._id,
+                    name: user.name,
+                    email: user.email,
+                    isVerified: user.isVerified
+                },
+                emailSent: false,
+                emailError: 'Email service temporarily unavailable'
+            });
+            return;
+        }
 
         res.status(201).json({ 
             message: 'Registration successful! Please check your email to verify your account.',
@@ -114,11 +163,29 @@ const registerUser = async (req, res) => {
                 name: user.name,
                 email: user.email,
                 isVerified: user.isVerified
-            }
+            },
+            emailSent: true
         });
     } catch (error) {
         console.error('Registration error:', error);
-        res.status(500).json({ message: 'Server error during registration' });
+        
+        // Provide more specific error messages
+        if (error.name === 'ValidationError') {
+            return res.status(400).json({ 
+                message: 'Validation error: ' + Object.values(error.errors).map(e => e.message).join(', ')
+            });
+        }
+        
+        if (error.code === 11000) {
+            return res.status(400).json({ 
+                message: 'User with this email already exists'
+            });
+        }
+        
+        res.status(500).json({ 
+            message: 'Server error during registration. Please try again later.',
+            error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
+        });
     }
 };
 
@@ -142,6 +209,134 @@ const verifyEmail = async (req, res) => {
         user.verificationToken = null;
         user.verificationTokenExpires = null;
         await user.save();
+
+        // Send welcome email
+        if (process.env.SENDGRID_API_KEY) {
+            try {
+                const welcomeMsg = {
+                    to: user.email,
+                    from: process.env.SENDGRID_FROM_EMAIL || 'noreply@lyvo.com',
+                    subject: 'Welcome to Lyvo+ - Your Account is Verified! 🎉',
+                    text: `Welcome to Lyvo+! Your account has been successfully verified. Start exploring amazing co-living spaces today!`,
+                    html: `
+                        <!DOCTYPE html>
+                        <html lang="en">
+                        <head>
+                            <meta charset="UTF-8">
+                            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                            <title>Welcome to Lyvo+</title>
+                        </head>
+                        <body style="margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f8fafc;">
+                            <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);">
+                                <!-- Header -->
+                                <div style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); padding: 40px 30px; text-align: center; position: relative;">
+                                    <div style="position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><pattern id="grain" width="100" height="100" patternUnits="userSpaceOnUse"><circle cx="50" cy="50" r="1" fill="white" opacity="0.1"/></pattern></defs><rect width="100" height="100" fill="url(%23grain)"/></svg>') repeat;"></div>
+                                    <div style="position: relative; z-index: 1;">
+                                        <div style="width: 80px; height: 80px; background: rgba(255, 255, 255, 0.2); border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 20px; backdrop-filter: blur(10px);">
+                                            <span style="font-size: 32px; color: white;">🎉</span>
+                                        </div>
+                                        <h1 style="color: white; margin: 0; font-size: 32px; font-weight: 700; letter-spacing: -0.5px;">Lyvo+</h1>
+                                        <p style="color: rgba(255, 255, 255, 0.9); margin: 8px 0 0 0; font-size: 16px; font-weight: 500;">Account Successfully Verified!</p>
+                                    </div>
+                                </div>
+
+                                <!-- Content -->
+                                <div style="padding: 40px 30px;">
+                                    <div style="text-align: center; margin-bottom: 30px;">
+                                        <h2 style="color: #1f2937; margin: 0 0 10px 0; font-size: 24px; font-weight: 600;">Welcome to Lyvo+!</h2>
+                                        <p style="color: #6b7280; margin: 0; font-size: 16px; line-height: 1.6;">Hi ${user.name}, your account is now verified and ready to go!</p>
+                                    </div>
+
+                                    <div style="background: linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%); border-radius: 12px; padding: 24px; margin-bottom: 30px; border-left: 4px solid #10b981;">
+                                        <p style="color: #065f46; margin: 0; font-size: 15px; line-height: 1.6; font-weight: 500;">
+                                            ✅ Your email has been successfully verified! You now have full access to all Lyvo+ features.
+                                        </p>
+                                    </div>
+
+                                    <div style="text-align: center; margin: 30px 0;">
+                                        <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}" 
+                                           style="
+                                                display: inline-block;
+                                                padding: 16px 32px;
+                                                background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+                                                color: white;
+                                                text-decoration: none;
+                                                border-radius: 12px;
+                                                font-weight: 600;
+                                                font-size: 16px;
+                                                box-shadow: 0 4px 15px rgba(16, 185, 129, 0.3);
+                                                transition: all 0.3s ease;
+                                                position: relative;
+                                                overflow: hidden;
+                                           "
+                                           onmouseover="this.style.transform='translateY(-2px)'; this.style.boxShadow='0 8px 25px rgba(16, 185, 129, 0.4)'"
+                                           onmouseout="this.style.transform='translateY(0)'; this.style.boxShadow='0 4px 15px rgba(16, 185, 129, 0.3)'">
+                                            <span style="position: relative; z-index: 1;">Start Exploring</span>
+                                        </a>
+                                    </div>
+
+                                    <!-- Next Steps -->
+                                    <div style="margin: 30px 0;">
+                                        <h3 style="color: #1f2937; margin: 0 0 20px 0; font-size: 18px; font-weight: 600;">What You Can Do Now</h3>
+                                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+                                            <div style="background: #f8fafc; border-radius: 8px; padding: 16px; text-align: center;">
+                                                <div style="font-size: 24px; margin-bottom: 8px;">🏠</div>
+                                                <p style="color: #374151; margin: 0; font-size: 14px; font-weight: 500;">Browse Accommodations</p>
+                                            </div>
+                                            <div style="background: #f8fafc; border-radius: 8px; padding: 16px; text-align: center;">
+                                                <div style="font-size: 24px; margin-bottom: 8px;">👥</div>
+                                                <p style="color: #374151; margin: 0; font-size: 14px; font-weight: 500;">Find Roommates</p>
+                                            </div>
+                                            <div style="background: #f8fafc; border-radius: 8px; padding: 16px; text-align: center;">
+                                                <div style="font-size: 24px; margin-bottom: 8px;">💳</div>
+                                                <p style="color: #374151; margin: 0; font-size: 14px; font-weight: 500;">Secure Payments</p>
+                                            </div>
+                                            <div style="background: #f8fafc; border-radius: 8px; padding: 16px; text-align: center;">
+                                                <div style="font-size: 24px; margin-bottom: 8px;">⭐</div>
+                                                <p style="color: #374151; margin: 0; font-size: 14px; font-weight: 500;">Rate & Review</p>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <!-- Quick Tips -->
+                                    <div style="background: #f8fafc; border-radius: 8px; padding: 20px; margin: 20px 0;">
+                                        <h4 style="color: #1f2937; margin: 0 0 12px 0; font-size: 16px; font-weight: 600;">💡 Quick Tips</h4>
+                                        <ul style="color: #374151; margin: 0; padding-left: 20px; font-size: 14px; line-height: 1.6;">
+                                            <li style="margin-bottom: 6px;">Complete your profile to get better roommate matches</li>
+                                            <li style="margin-bottom: 6px;">Set your preferences to see relevant accommodations</li>
+                                            <li style="margin-bottom: 6px;">Enable notifications to stay updated on new listings</li>
+                                            <li>Join our community forums to connect with other members</li>
+                                        </ul>
+                                    </div>
+                                </div>
+
+                                <!-- Footer -->
+                                <div style="background: #f9fafb; padding: 24px 30px; border-top: 1px solid #e5e7eb;">
+                                    <div style="text-align: center; margin-bottom: 16px;">
+                                        <p style="color: #6b7280; margin: 0; font-size: 14px; line-height: 1.5;">
+                                            🎉 Welcome to the Lyvo+ community!<br>
+                                            💬 Need help? Our support team is here for you.
+                                        </p>
+                                    </div>
+                                    <div style="text-align: center;">
+                                        <p style="color: #9ca3af; margin: 0; font-size: 12px;">
+                                            © 2024 Lyvo+. All rights reserved. | 
+                                            <a href="#" style="color: #10b981; text-decoration: none;">Privacy Policy</a> | 
+                                            <a href="#" style="color: #10b981; text-decoration: none;">Terms of Service</a>
+                                        </p>
+                                    </div>
+                                </div>
+                            </div>
+                        </body>
+                        </html>
+                    `,
+                };
+                await sgMail.send(welcomeMsg);
+                console.log('Welcome email sent successfully to:', user.email);
+            } catch (emailError) {
+                console.error('Welcome email error:', emailError);
+            }
+        }
 
         // Generate JWT token for automatic login
         const jwtToken = jwt.sign(
@@ -240,31 +435,77 @@ const forgotPassword = async (req, res) => {
         // Construct reset link (adjust frontend URL as needed)
         const resetLink = `http://localhost:3000/reset-password?token=${resetToken}`;
 
-        // Send email
+                // Send email
         const msg = {
             to: email,
             from: process.env.SENDGRID_FROM_EMAIL, // Must be a verified sender
-            subject: 'Password Reset Request',
-            text: `Click the link to reset your password: ${resetLink}`,
+            subject: 'Reset Your Password - Lyvo',
+            text: `Hi ${user.name}, we received a request to reset your password. Click this link: ${resetLink}`,
             html: `
-    <p>Click the button below to reset your password:</p>
-    <a href="${resetLink}" 
-      style="
-        display: inline-block;
-        padding: 12px 28px;
-        background: linear-gradient(90deg, #ff9800, #ff5722);
-        color: #fff;
-        font-weight: bold;
-        border-radius: 6px;
-        text-decoration: none;
-        font-size: 16px;
-        margin: 16px 0;
-      "
-      target="_blank"
-    >Reset Password</a>
-    <p>If you did not request this, you can ignore this email.</p>
-    <p>This link will expire in 1 hour.</p>
-  `,
+                <!DOCTYPE html>
+                <html lang="en">
+                <head>
+                    <meta charset="UTF-8">
+                    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                    <title>Reset Your Password</title>
+                    <style>
+                        body {
+                            font-family: Arial, sans-serif;
+                            background-color: #f4f4f4;
+                            margin: 0;
+                            padding: 0;
+                        }
+                        .container {
+                            max-width: 600px;
+                            margin: 40px auto;
+                            background-color: #ffffff;
+                            border-radius: 8px;
+                            padding: 30px;
+                            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+                            color: #333333;
+                        }
+                        h2 {
+                            color: #FF5722;
+                            text-align: center;
+                        }
+                        p {
+                            font-size: 16px;
+                        }
+                        .btn {
+                            display: inline-block;
+                            margin: 20px auto;
+                            padding: 12px 25px;
+                            background-color: #FF5722;
+                            color: white;
+                            text-decoration: none;
+                            border-radius: 5px;
+                            font-weight: bold;
+                            text-align: center;
+                        }
+                        .footer {
+                            text-align: center;
+                            font-size: 12px;
+                            color: #888888;
+                            margin-top: 20px;
+                        }
+                    </style>
+                </head>
+                <body>
+                    <div class="container">
+                        <h2>Reset Your Password</h2>
+                        <p>Hi <strong>${user.name}</strong>,</p>
+                        <p>We received a request to reset your password. Click the button below to choose a new password:</p>
+                        <p style="text-align:center;">
+                            <a class="btn" href="${resetLink}">Reset Password</a>
+                        </p>
+                        <p>If you didn't request a password reset, you can safely ignore this email.</p>
+                        <div class="footer">
+                            &copy; ${new Date().getFullYear()} Lyvo. All rights reserved.
+                        </div>
+                    </div>
+                </body>
+                </html>
+            `,
         };
 
         await sgMail.send(msg);

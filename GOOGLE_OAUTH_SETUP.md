@@ -1,12 +1,12 @@
-# Google OAuth Setup for MoodBites
+# Google OAuth Setup for Lyvo
 
-This guide will help you set up Google OAuth authentication for your MoodBites application.
+This guide will help you set up Google OAuth authentication for your Lyvo application.
 
 ## Prerequisites
 
 - Google Cloud Console account
 - Node.js and npm installed
-- Your MoodBites application running
+- Your Lyvo application running
 
 ## Step 1: Create Google Cloud Project
 
@@ -19,7 +19,7 @@ This guide will help you set up Google OAuth authentication for your MoodBites a
 1. In Google Cloud Console, go to "APIs & Services" > "OAuth consent screen"
 2. Choose "External" user type
 3. Fill in the required information:
-   - App name: "MoodBites"
+   - App name: "Lyvo"
    - User support email: Your email
    - Developer contact information: Your email
 4. Add scopes:
@@ -34,10 +34,10 @@ This guide will help you set up Google OAuth authentication for your MoodBites a
 2. Click "Create Credentials" > "OAuth 2.0 Client IDs"
 3. Choose "Web application"
 4. Add authorized JavaScript origins:
-   - `http://localhost:3000` (for development)
+   - `http://localhost:5173` (for development)
    - `https://yourdomain.com` (for production)
 5. Add authorized redirect URIs:
-   - `http://localhost:3000` (for development)
+   - `http://localhost:5173` (for development)
    - `https://yourdomain.com` (for production)
 6. Copy the Client ID
 
@@ -45,17 +45,19 @@ This guide will help you set up Google OAuth authentication for your MoodBites a
 
 ### Frontend (.env file in frontend directory)
 ```env
-REACT_APP_GOOGLE_CLIENT_ID=your-google-client-id-here
+VITE_GOOGLE_CLIENT_ID=your-google-client-id-here
+VITE_API_URL=http://localhost:4002/api
 ```
 
 ### Backend (.env file in user-service directory)
 ```env
 GOOGLE_CLIENT_ID=your-google-client-id-here
 JWT_SECRET=your-jwt-secret
-MONGODB_URI=your-mongodb-connection-string
+MONGO_URI=your-mongodb-atlas-connection-string
 SENDGRID_API_KEY=your-sendgrid-api-key
 SENDGRID_FROM_EMAIL=your-verified-sender-email
-FRONTEND_URL=http://localhost:3000
+FRONTEND_URL=http://localhost:5173
+PORT=4002
 ```
 
 ## Step 5: Install Dependencies
@@ -96,7 +98,7 @@ The Google Sign-In script is loaded dynamically, so no additional npm packages a
 
 2. **"Redirect URI mismatch" error**
    - Add your domain to authorized redirect URIs in Google Cloud Console
-   - Include both `http://localhost:3000` and `https://yourdomain.com`
+   - Include both `http://localhost:5173` and `https://yourdomain.com`
 
 3. **"Google script not loading"**
    - Check browser console for network errors
