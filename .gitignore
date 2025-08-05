@@ -1,10 +1,2 @@
 user-service/.env
-auth-service/.env
-notification-service/.env
-frontend/.env
-food-service/.env
-order-service/.env
-payment-service/.env
-delivery-service/.env
-
 
