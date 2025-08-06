@@ -2,11 +2,11 @@
 
 This guide will help you set up Google OAuth authentication for your Lyvo application.
 
-## Prerequisites
+## Prerequisites  wee
 
 - Google Cloud Console account
 - Node.js and npm installed
-- Your Lyvo application running
+- Your Lyvo application running 
 
 ## Step 1: Create Google Cloud Project
 

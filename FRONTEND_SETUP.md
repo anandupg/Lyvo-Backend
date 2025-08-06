@@ -53,7 +53,7 @@ VITE_ENV=development
 - Check browser console for errors
 - Verify the Google script is loading
 
-### "Invalid Client ID" Error
+### "Invalid Client ID" Error ww
 - Verify your Google Client ID is correct
 - Check that the domain is authorized in Google Cloud Console
 - Ensure you're using the correct Client ID for your environment

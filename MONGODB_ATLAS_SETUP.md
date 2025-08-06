@@ -1,6 +1,6 @@
 # MongoDB Atlas Setup Guide for Lyvo
 
-## Step 1: Create MongoDB Atlas Account
+## Step 1: Create MongoDB Atlas Account ww
 
 1. Go to [MongoDB Atlas](https://www.mongodb.com/atlas)
 2. Click "Try Free" or "Sign Up"
