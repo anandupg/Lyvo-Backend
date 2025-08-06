@@ -25,6 +25,7 @@ const connectdb = async () => {
         process.exit(1);
     }
 };
+//efkjheifhe
 
 connectdb(); // Call the function to connect
 
