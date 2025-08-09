@@ -29,8 +29,143 @@ const registerUser = async (req, res) => {
         
         // Check if user already exists
         const existingUser = await User.findOne({ email });
+        
         if (existingUser) {
-            return res.status(400).json({ message: 'User already exists' });
+            // If user exists but is not verified, allow them to request verification again
+            if (!existingUser.isVerified) {
+                // Generate new verification token
+                const verificationToken = crypto.randomBytes(32).toString('hex');
+                const verificationTokenExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+                
+                // Update existing user with new verification token
+                existingUser.verificationToken = verificationToken;
+                existingUser.verificationTokenExpires = verificationTokenExpires;
+                await existingUser.save();
+                
+                // Create verification link
+                const verificationLink = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/verify-email?token=${verificationToken}`;
+                
+                // Send verification email
+                const msg = {
+                    to: email,
+                    from: process.env.SENDGRID_FROM_EMAIL || 'noreply@lyvo.com',
+                    subject: 'Verify Your Email - Lyvo',
+                    text: `Hello ${existingUser.name}, we noticed your email hasn't been verified yet. Please verify your email address by clicking this link: ${verificationLink}`,
+                    html: `
+                        <!DOCTYPE html>
+                        <html lang="en">
+                        <head>
+                            <meta charset="UTF-8">
+                            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                            <title>Email Verification</title>
+                        </head>
+                        <body style="margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f0f2f5;">
+                            <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f0f2f5; padding: 20px;">
+                                <tr>
+                                    <td align="center">
+                                        <table width="480" cellpadding="0" cellspacing="0" style="background-color: #ffffff; border-radius: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); overflow: hidden;">
+                                            <!-- Header -->
+                                            <tr>
+                                                <td style="background: linear-gradient(135deg, #e53e3e 0%, #c53030 100%); padding: 30px 20px; text-align: center; color: white;">
+                                                    <div style="width: 50px; height: 50px; background-color: rgba(255,255,255,0.2); border-radius: 50%; margin: 0 auto 15px; display: flex; align-items: center; justify-content: center; font-size: 24px;">
+                                                        ✉️
+                                                    </div>
+                                                    <h1 style="font-size: 20px; font-weight: 600; margin: 0 0 5px 0; color: white;">Verify Your Email</h1>
+                                                    <p style="font-size: 14px; margin: 0; opacity: 0.9; color: white;">Complete your registration in just one click</p>
+                                                </td>
+                                            </tr>
+                                            
+                                            <!-- Content -->
+                                            <tr>
+                                                <td style="padding: 30px 20px; text-align: center;">
+                                                    <div style="font-size: 16px; color: #333; margin-bottom: 10px; font-weight: 500;">Welcome back to Lyvo!</div>
+                                                    
+                                                    <div style="font-size: 14px; color: #666; line-height: 1.4; margin-bottom: 20px;">
+                                                        We noticed your email hasn't been verified yet. To complete your registration and secure your account, please verify your email address by clicking the button below.
+                                                    </div>
+                                                    
+                                                    <div style="background-color: #f8f9fa; padding: 12px; border-radius: 6px; margin: 15px 0; border-left: 4px solid #e53e3e; text-align: left;">
+                                                        <strong style="color: #333; font-size: 13px;">Email Address:</strong>
+                                                        <div style="font-family: 'Courier New', monospace; font-size: 14px; color: #2c3e50; font-weight: 600; margin-top: 4px;">${email}</div>
+                                                    </div>
+                                                    
+                                                    <a href="${verificationLink}" style="display: inline-block; background: linear-gradient(135deg, #e53e3e 0%, #c53030 100%); color: white; text-decoration: none; padding: 12px 28px; border-radius: 30px; font-size: 15px; font-weight: 600; margin: 15px 0; box-shadow: 0 4px 12px rgba(229, 62, 62, 0.3);">
+                                                        ✓ Verify Email Address
+                                                    </a>
+                                                    
+                                                    <div style="background-color: #ffe6e6; border-left: 4px solid #ff4757; padding: 10px 12px; margin: 15px 0; border-radius: 0 6px 6px 0; color: #721c24; font-size: 12px; text-align: left;">
+                                                        <strong>⏰ Important:</strong> This verification link will expire in 24 hours for security reasons.
+                                                    </div>
+                                                    
+                                                    <div style="background-color: #fff3cd; border: 1px solid #ffeaa7; border-radius: 6px; padding: 12px; margin: 15px 0; color: #856404; font-size: 12px; line-height: 1.3; text-align: left;">
+                                                        <span style="font-size: 16px; margin-right: 8px;">🔒</span>
+                                                        <strong>Security Notice:</strong> If you didn't create an account with us, please ignore this email. Your email address will not be used for any other purpose.
+                                                    </div>
+                                                    
+                                                    <div style="margin-top: 20px; padding-top: 15px; border-top: 1px solid #eee; font-size: 12px; color: #888; line-height: 1.3; text-align: left;">
+                                                        <strong>Having trouble with the button?</strong><br>
+                                                        Copy and paste the following link into your browser:
+                                                        <div style="background-color: #f8f9fa; padding: 8px; border-radius: 4px; font-family: 'Courier New', monospace; font-size: 10px; word-break: break-all; margin: 8px 0; border: 1px solid #dee2e6;">${verificationLink}</div>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                            
+                                            <!-- Footer -->
+                                            <tr>
+                                                <td style="background-color: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 12px;">
+                                                    <p style="margin: 0 0 10px 0;">© 2024 Lyvo. All rights reserved.</p>
+                                                    <p style="margin: 0; font-size: 11px; color: #999;">This email was sent to ${email}</p>
+                                                </td>
+                                            </tr>
+                                        </table>
+                                    </td>
+                                </tr>
+                            </table>
+                        </body>
+                        </html>
+                    `
+                };
+                
+                // Try to send verification email
+                try {
+                    await sgMail.send(msg);
+                    console.log('Verification email sent successfully to existing user:', email);
+                    
+                    return res.status(200).json({ 
+                        message: 'Verification email sent! Please check your email to verify your account.',
+                        user: {
+                            _id: existingUser._id,
+                            name: existingUser.name,
+                            email: existingUser.email,
+                            isVerified: existingUser.isVerified
+                        },
+                        emailSent: true,
+                        existingUser: true
+                    });
+                } catch (emailError) {
+                    console.error('SendGrid error for existing user:', emailError);
+                    
+                    return res.status(200).json({ 
+                        message: 'Account found but email service temporarily unavailable. Please try again later.',
+                        user: {
+                            _id: existingUser._id,
+                            name: existingUser.name,
+                            email: existingUser.email,
+                            isVerified: existingUser.isVerified
+                        },
+                        emailSent: false,
+                        emailError: 'Email service temporarily unavailable',
+                        existingUser: true
+                    });
+                }
+            } else {
+                // User exists and is already verified
+                return res.status(400).json({ 
+                    message: 'User already exists and is verified. Please log in instead.',
+                    existingUser: true,
+                    isVerified: true
+                });
+            }
         }
 
         // Hash password
@@ -124,16 +259,9 @@ const registerUser = async (req, res) => {
                                     
                                     <!-- Footer -->
                                     <tr>
-                                        <td style="background-color: #f8f9fa; padding: 15px; text-align: center; border-top: 1px solid #eee; font-size: 12px; color: #666;">
-                                            <p style="margin: 0 0 6px 0;"><strong>Lyvo</strong></p>
-                                            <p style="margin: 0 0 6px 0;">Co-living Platform</p>
-                                            <p style="margin: 0 0 6px 0;">
-                                                Need help? <a href="mailto:support@lyvo.com" style="color: #4CAF50; text-decoration: none;">Contact Support</a> | 
-                                                <a href="#" style="color: #4CAF50; text-decoration: none;">Privacy Policy</a>
-                                            </p>
-                                            <p style="margin: 10px 0 0 0; font-size: 11px; color: #999;">
-                                                This email was sent to ${email}. If you believe this was sent to you by mistake, please ignore this email.
-                                            </p>
+                                        <td style="background-color: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 12px;">
+                                            <p style="margin: 0 0 10px 0;">© 2024 Lyvo. All rights reserved.</p>
+                                            <p style="margin: 0; font-size: 11px; color: #999;">This email was sent to ${email}</p>
                                         </td>
                                     </tr>
                                 </table>
@@ -142,15 +270,11 @@ const registerUser = async (req, res) => {
                     </table>
                 </body>
                 </html>
-            `,
+            `
         };
 
         // Try to send verification email
         try {
-            console.log('Attempting to send email to:', email);
-            console.log('SendGrid API Key configured:', !!process.env.SENDGRID_API_KEY);
-            console.log('From email:', process.env.SENDGRID_FROM_EMAIL || 'noreply@lyvo.com');
-            
             await sgMail.send(msg);
             console.log('Email sent successfully to:', email);
         } catch (emailError) {
