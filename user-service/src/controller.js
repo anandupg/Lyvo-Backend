@@ -214,10 +214,16 @@ const registerUser = async (req, res) => {
                                     <!-- Header -->
                                     <tr>
                                         <td style="background: linear-gradient(135deg, #e53e3e 0%, #c53030 100%); padding: 30px 20px; text-align: center; color: white;">
-                                            <div style="width: 50px; height: 50px; background-color: rgba(255,255,255,0.2); border-radius: 50%; margin: 0 auto 15px; display: flex; align-items: center; justify-content: center; font-size: 24px;">
-                                                ✉️
+                                            <div style="display: flex; align-items: center; justify-content: center; margin-bottom: 15px;">
+                                                <div style="width: 60px; height: 60px; background-color: rgba(255,255,255,0.2); border-radius: 12px; display: flex; align-items: center; justify-content: center; margin-right: 15px; backdrop-filter: blur(10px);">
+                                                    <img src="https://lyvo.com/Lyvo_no_bg.png" alt="Lyvo Logo" style="width: 40px; height: 40px; border-radius: 8px; object-fit: contain;" />
+                                                </div>
+                                                <div style="text-align: left;">
+                                                    <h1 style="font-size: 24px; font-weight: 700; margin: 0; color: white;">Lyvo+</h1>
+                                                    <p style="font-size: 12px; margin: 0; opacity: 0.9; color: white;">Co-Living Platform</p>
+                                                </div>
                                             </div>
-                                            <h1 style="font-size: 20px; font-weight: 600; margin: 0 0 5px 0; color: white;">Verify Your Email</h1>
+                                            <h2 style="font-size: 20px; font-weight: 600; margin: 0 0 5px 0; color: white;">Verify Your Email</h2>
                                             <p style="font-size: 14px; margin: 0; opacity: 0.9; color: white;">Complete your registration in just one click</p>
                                         </td>
                                     </tr>
@@ -371,10 +377,15 @@ const verifyEmail = async (req, res) => {
                                 <div style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); padding: 40px 30px; text-align: center; position: relative;">
                                     <div style="position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><pattern id="grain" width="100" height="100" patternUnits="userSpaceOnUse"><circle cx="50" cy="50" r="1" fill="white" opacity="0.1"/></pattern></defs><rect width="100" height="100" fill="url(%23grain)"/></svg>') repeat;"></div>
                                     <div style="position: relative; z-index: 1;">
-                                        <div style="width: 80px; height: 80px; background: rgba(255, 255, 255, 0.2); border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 20px; backdrop-filter: blur(10px);">
-                                            <span style="font-size: 32px; color: white;">🎉</span>
+                                        <div style="display: flex; align-items: center; justify-content: center; margin-bottom: 20px;">
+                                            <div style="width: 80px; height: 80px; background: rgba(255, 255, 255, 0.2); border-radius: 16px; display: flex; align-items: center; justify-content: center; margin-right: 20px; backdrop-filter: blur(10px);">
+                                                <img src="https://lyvo.com/Lyvo_no_bg.png" alt="Lyvo Logo" style="width: 50px; height: 50px; border-radius: 10px; object-fit: contain;" />
+                                            </div>
+                                            <div style="text-align: left;">
+                                                <h1 style="color: white; margin: 0; font-size: 32px; font-weight: 700; letter-spacing: -0.5px;">Lyvo+</h1>
+                                                <p style="color: rgba(255, 255, 255, 0.9); margin: 0; font-size: 14px; font-weight: 500;">Co-Living Platform</p>
+                                            </div>
                                         </div>
-                                        <h1 style="color: white; margin: 0; font-size: 32px; font-weight: 700; letter-spacing: -0.5px;">Lyvo+</h1>
                                         <p style="color: rgba(255, 255, 255, 0.9); margin: 8px 0 0 0; font-size: 16px; font-weight: 500;">Account Successfully Verified!</p>
                                     </div>
                                 </div>
@@ -596,10 +607,16 @@ const forgotPassword = async (req, res) => {
                                     <!-- Header -->
                                     <tr>
                                         <td style="background: linear-gradient(135deg, #e53e3e 0%, #c53030 100%); padding: 30px 20px; text-align: center; color: white;">
-                                            <div style="width: 50px; height: 50px; background-color: rgba(255,255,255,0.2); border-radius: 50%; margin: 0 auto 15px; display: flex; align-items: center; justify-content: center; font-size: 24px;">
-                                                🔐
+                                            <div style="display: flex; align-items: center; justify-content: center; margin-bottom: 15px;">
+                                                <div style="width: 60px; height: 60px; background-color: rgba(255,255,255,0.2); border-radius: 12px; display: flex; align-items: center; justify-content: center; margin-right: 15px; backdrop-filter: blur(10px);">
+                                                    <img src="https://lyvo.com/Lyvo_no_bg.png" alt="Lyvo Logo" style="width: 40px; height: 40px; border-radius: 8px; object-fit: contain;" />
+                                                </div>
+                                                <div style="text-align: left;">
+                                                    <h1 style="font-size: 24px; font-weight: 700; margin: 0; color: white;">Lyvo+</h1>
+                                                    <p style="font-size: 12px; margin: 0; opacity: 0.9; color: white;">Co-Living Platform</p>
+                                                </div>
                                             </div>
-                                            <h1 style="font-size: 20px; font-weight: 600; margin: 0 0 5px 0; color: white;">Reset Your Password</h1>
+                                            <h2 style="font-size: 20px; font-weight: 600; margin: 0 0 5px 0; color: white;">Reset Your Password</h2>
                                             <p style="font-size: 14px; margin: 0; opacity: 0.9; color: white;">Secure your account with a new password</p>
                                         </td>
                                     </tr>
