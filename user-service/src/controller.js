@@ -358,11 +358,28 @@ const verifyEmail = async (req, res) => {
         // Send welcome email
         if (process.env.SENDGRID_API_KEY) {
             try {
+                // Role-specific welcome messages
+                let welcomeSubject, welcomeText, welcomeHtml;
+                
+                if (user.role === 3) {
+                    // Property Owner
+                    welcomeSubject = 'Welcome to Lyvo+ - Property Owner Account Verified! 🏠🎉';
+                    welcomeText = `Welcome to Lyvo+! Your property owner account has been successfully verified. Start listing your properties and connecting with room seekers today!`;
+                } else if (user.role === 2) {
+                    // Admin
+                    welcomeSubject = 'Welcome to Lyvo+ - Admin Account Verified! 🔐🎉';
+                    welcomeText = `Welcome to Lyvo+! Your admin account has been successfully verified. You now have access to the admin dashboard.`;
+                } else {
+                    // Room Seeker (default)
+                    welcomeSubject = 'Welcome to Lyvo+ - Your Account is Verified! 🎉';
+                    welcomeText = `Welcome to Lyvo+! Your account has been successfully verified. Start exploring amazing co-living spaces today!`;
+                }
+                
                 const welcomeMsg = {
                     to: user.email,
                     from: process.env.SENDGRID_FROM_EMAIL || 'noreply@lyvo.com',
-                    subject: 'Welcome to Lyvo+ - Your Account is Verified! 🎉',
-                    text: `Welcome to Lyvo+! Your account has been successfully verified. Start exploring amazing co-living spaces today!`,
+                    subject: welcomeSubject,
+                    text: welcomeText,
                     html: `
                         <!DOCTYPE html>
                         <html lang="en">
@@ -394,7 +411,11 @@ const verifyEmail = async (req, res) => {
                                 <div style="padding: 40px 30px;">
                                     <div style="text-align: center; margin-bottom: 30px;">
                                         <h2 style="color: #1f2937; margin: 0 0 10px 0; font-size: 24px; font-weight: 600;">Welcome to Lyvo+!</h2>
-                                        <p style="color: #6b7280; margin: 0; font-size: 16px; line-height: 1.6;">Hi ${user.name}, your account is now verified and ready to go!</p>
+                                        <p style="color: #6b7280; margin: 0; font-size: 16px; line-height: 1.6;">
+                                            ${user.role === 3 ? 'Hi ' + user.name + ', your property owner account is now verified and ready to go!' : 
+                                              user.role === 2 ? 'Hi ' + user.name + ', your admin account is now verified and ready to go!' : 
+                                              'Hi ' + user.name + ', your account is now verified and ready to go!'}
+                                        </p>
                                     </div>
 
                                     <div style="background: linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%); border-radius: 12px; padding: 24px; margin-bottom: 30px; border-left: 4px solid #10b981;">
@@ -404,7 +425,7 @@ const verifyEmail = async (req, res) => {
                                     </div>
 
                                     <div style="text-align: center; margin: 30px 0;">
-                                        <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}" 
+                                        <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}${user.role === 3 ? '/owner-dashboard' : user.role === 2 ? '/admin-dashboard' : '/dashboard'}" 
                                            style="
                                                 display: inline-block;
                                                 padding: 16px 32px;
@@ -421,7 +442,11 @@ const verifyEmail = async (req, res) => {
                                            "
                                            onmouseover="this.style.transform='translateY(-2px)'; this.style.boxShadow='0 8px 25px rgba(16, 185, 129, 0.4)'"
                                            onmouseout="this.style.transform='translateY(0)'; this.style.boxShadow='0 4px 15px rgba(16, 185, 129, 0.3)'">
-                                            <span style="position: relative; z-index: 1;">Start Exploring</span>
+                                            <span style="position: relative; z-index: 1;">
+                                                ${user.role === 3 ? 'Go to Owner Dashboard' : 
+                                                  user.role === 2 ? 'Go to Admin Dashboard' : 
+                                                  'Start Exploring'}
+                                            </span>
                                         </a>
                                     </div>
 
@@ -429,11 +454,49 @@ const verifyEmail = async (req, res) => {
                                     <div style="margin: 30px 0;">
                                         <h3 style="color: #1f2937; margin: 0 0 20px 0; font-size: 18px; font-weight: 600;">What You Can Do Now</h3>
                                         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+                                            ${user.role === 3 ? `
+                                            <!-- Property Owner Actions -->
+                                            <div style="background: #f8fafc; border-radius: 8px; padding: 16px; text-align: center;">
+                                                <div style="font-size: 24px; margin-bottom: 8px;">🏠</div>
+                                                <p style="color: #374151; margin: 0; font-size: 14px; font-weight: 500;">List Properties</p>
+                                            </div>
+                                            <div style="background: #f8fafc; border-radius: 8px; padding: 16px; text-align: center;">
+                                                <div style="font-size: 24px; margin-bottom: 8px;">👥</div>
+                                                <p style="color: #374151; margin: 0; font-size: 14px; font-weight: 500;">Manage Tenants</p>
+                                            </div>
+                                            <div style="background: #f8fafc; border-radius: 8px; padding: 16px; text-align: center;">
+                                                <div style="font-size: 24px; margin-bottom: 8px;">💳</div>
+                                                <p style="color: #374151; margin: 0; font-size: 14px; font-weight: 500;">Receive Payments</p>
+                                            </div>
+                                            <div style="background: #f8fafc; border-radius: 8px; padding: 16px; text-align: center;">
+                                                <div style="font-size: 24px; margin-bottom: 8px;">⭐</div>
+                                                <p style="color: #374151; margin: 0; font-size: 14px; font-weight: 500;">Property Analytics</p>
+                                            </div>
+                                            ` : user.role === 2 ? `
+                                            <!-- Admin Actions -->
+                                            <div style="background: #f8fafc; border-radius: 8px; padding: 16px; text-align: center;">
+                                                <div style="font-size: 24px; margin-bottom: 8px;">🔐</div>
+                                                <p style="color: #374151; margin: 0; font-size: 14px; font-weight: 500;">User Management</p>
+                                            </div>
+                                            <div style="background: #f8fafc; border-radius: 8px; padding: 16px; text-align: center;">
+                                                <div style="font-size: 24px; margin-bottom: 8px;">📊</div>
+                                                <p style="color: #374151; margin: 0; font-size: 14px; font-weight: 500;">System Analytics</p>
+                                            </div>
+                                            <div style="background: #f8fafc; border-radius: 8px; padding: 16px; text-align: center;">
+                                                <div style="font-size: 24px; margin-bottom: 8px;">⚙️</div>
+                                                <p style="color: #374151; margin: 0; font-size: 14px; font-weight: 500;">System Settings</p>
+                                            </div>
+                                            <div style="background: #f8fafc; border-radius: 8px; padding: 16px; text-align: center;">
+                                                <div style="font-size: 24px; margin-bottom: 8px;">🛡️</div>
+                                                <p style="color: #374151; margin: 0; font-size: 14px; font-weight: 500;">Security & Access</p>
+                                            </div>
+                                            ` : `
+                                            <!-- Room Seeker Actions (Default) -->
                                             <div style="background: #f8fafc; border-radius: 8px; padding: 16px; text-align: center;">
                                                 <div style="font-size: 24px; margin-bottom: 8px;">🏠</div>
                                                 <p style="color: #374151; margin: 0; font-size: 14px; font-weight: 500;">Browse Accommodations</p>
                                             </div>
-                                            <div style="background: #f8fafc; border-radius: 8px; padding: 16px; text-align: center;">
+                                            <div style="background: #f8fafc; border-radius: 8px; padding: 16px; text-align: 16px; text-align: center;">
                                                 <div style="font-size: 24px; margin-bottom: 8px;">👥</div>
                                                 <p style="color: #374151; margin: 0; font-size: 14px; font-weight: 500;">Find Roommates</p>
                                             </div>
@@ -445,6 +508,7 @@ const verifyEmail = async (req, res) => {
                                                 <div style="font-size: 24px; margin-bottom: 8px;">⭐</div>
                                                 <p style="color: #374151; margin: 0; font-size: 14px; font-weight: 500;">Rate & Review</p>
                                             </div>
+                                            `}
                                         </div>
                                     </div>
 
@@ -452,10 +516,25 @@ const verifyEmail = async (req, res) => {
                                     <div style="background: #f8fafc; border-radius: 8px; padding: 20px; margin: 20px 0;">
                                         <h4 style="color: #1f2937; margin: 0 0 12px 0; font-size: 16px; font-weight: 600;">💡 Quick Tips</h4>
                                         <ul style="color: #374151; margin: 0; padding-left: 20px; font-size: 14px; line-height: 1.6;">
+                                            ${user.role === 3 ? `
+                                            <!-- Property Owner Tips -->
+                                            <li style="margin-bottom: 6px;">Complete your property details to attract more tenants</li>
+                                            <li style="margin-bottom: 6px;">Set competitive pricing based on market rates</li>
+                                            <li style="margin-bottom: 6px;">Enable notifications for new tenant inquiries</li>
+                                            <li>Use high-quality photos to showcase your properties</li>
+                                            ` : user.role === 2 ? `
+                                            <!-- Admin Tips -->
+                                            <li style="margin-bottom: 6px;">Monitor system performance and user activity</li>
+                                            <li style="margin-bottom: 6px;">Review and moderate user-generated content</li>
+                                            <li style="margin-bottom: 6px;">Keep system settings updated and secure</li>
+                                            <li>Regularly backup important system data</li>
+                                            ` : `
+                                            <!-- Room Seeker Tips (Default) -->
                                             <li style="margin-bottom: 6px;">Complete your profile to get better roommate matches</li>
                                             <li style="margin-bottom: 6px;">Set your preferences to see relevant accommodations</li>
                                             <li style="margin-bottom: 6px;">Enable notifications to stay updated on new listings</li>
                                             <li>Join our community forums to connect with other members</li>
+                                            `}
                                         </ul>
                                     </div>
                                 </div>
@@ -810,7 +889,7 @@ const updateUserProfile = async (req, res) => {
 // Google Sign-In
 const googleSignIn = async (req, res) => {
     try {
-        const { credential } = req.body;
+        const { credential, role } = req.body;
 
         if (!credential) {
             return res.status(400).json({ message: 'Google credential is required' });
@@ -834,6 +913,7 @@ const googleSignIn = async (req, res) => {
                 name: name,
                 email: email,
                 googleId: googleId,
+                role: role !== undefined ? role : 1, // Use provided role or default to 1
                 isVerified: true, // Google users are pre-verified
                 password: crypto.randomBytes(32).toString('hex'), // Generate random password for Google users
             });
