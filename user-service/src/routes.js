@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { getAllUsers, registerUser, verifyEmail, loginUser, forgotPassword, resetPassword, getUserProfile, updateUserProfile, changePassword, googleSignIn } = require('./controller');
+const { getAllUsers, registerUser, verifyEmail, loginUser, forgotPassword, resetPassword, getUserProfile, updateUserProfile, changePassword, googleSignIn, uploadProfilePicture, upload } = require('./controller');
 const verifyJWT = require('./middleware');
 
 // Public routes
@@ -16,5 +16,15 @@ router.get('/user/users', verifyJWT, getAllUsers);
 router.get('/user/profile/:userId', verifyJWT, getUserProfile);
 router.put('/user/profile/:userId', verifyJWT, updateUserProfile);
 router.post('/user/change-password', verifyJWT, changePassword);
+router.post('/user/upload-profile-picture', verifyJWT, upload.single('profilePicture'), uploadProfilePicture);
+
+// Test authentication endpoint
+router.get('/user/test-auth', verifyJWT, (req, res) => {
+    res.json({ 
+        message: 'Authentication successful', 
+        user: req.user,
+        timestamp: new Date().toISOString()
+    });
+});
 
 module.exports = router;

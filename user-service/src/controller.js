@@ -7,6 +7,31 @@ const jwt = require('jsonwebtoken');
 const sgMail = require('@sendgrid/mail');
 const crypto = require('crypto');
 const { OAuth2Client } = require('google-auth-library');
+const cloudinary = require('cloudinary').v2;
+const multer = require('multer');
+
+// Configure Cloudinary
+cloudinary.config({
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+    api_key: process.env.CLOUDINARY_API_KEY,
+    api_secret: process.env.CLOUDINARY_API_SECRET
+});
+
+// Configure multer for file uploads
+const upload = multer({
+    storage: multer.memoryStorage(),
+    limits: {
+        fileSize: 5 * 1024 * 1024, // 5MB limit
+    },
+    fileFilter: (req, file, cb) => {
+        if (file.mimetype.startsWith('image/')) {
+            cb(null, true);
+        } else {
+            cb(new Error('Only image files are allowed'), false);
+        }
+    }
+});
+
 // Configure SendGrid
 if (process.env.SENDGRID_API_KEY) {
     sgMail.setApiKey(process.env.SENDGRID_API_KEY);
@@ -634,6 +659,23 @@ const loginUser = async (req, res) => {
             email: user.email,
             role: user.role,
             isVerified: user.isVerified,
+            profilePicture: user.profilePicture,
+            phone: user.phone,
+            location: user.location,
+            bio: user.bio,
+            occupation: user.occupation,
+            company: user.company,
+            workSchedule: user.workSchedule,
+            preferredLocation: user.preferredLocation,
+            budget: user.budget,
+            roomType: user.roomType,
+            genderPreference: user.genderPreference,
+            lifestyle: user.lifestyle,
+            cleanliness: user.cleanliness,
+            noiseLevel: user.noiseLevel,
+            smoking: user.smoking,
+            pets: user.pets,
+            amenities: user.amenities,
             createdAt: user.createdAt,
             updatedAt: user.updatedAt
         };
@@ -865,10 +907,18 @@ const updateUserProfile = async (req, res) => {
         const { userId } = req.params;
         const updateData = req.body;
         
+        // Ensure user can only update their own profile
+        if (req.user.id !== userId) {
+            return res.status(403).json({ message: 'You can only update your own profile' });
+        }
+        
+        // Remove sensitive fields that shouldn't be updated through this endpoint
+        const { email, password, googleId, role, isVerified, verificationToken, verificationTokenExpires, ...safeUpdateData } = updateData;
+        
         // Find and update user
         const user = await User.findByIdAndUpdate(
             userId,
-            { $set: updateData },
+            { $set: safeUpdateData },
             { new: true, runValidators: true }
         ).select('-password');
         
@@ -913,16 +963,21 @@ const googleSignIn = async (req, res) => {
                 name: name,
                 email: email,
                 googleId: googleId,
+                profilePicture: picture, // Store Google profile picture
                 role: role !== undefined ? role : 1, // Use provided role or default to 1
                 isVerified: true, // Google users are pre-verified
                 password: crypto.randomBytes(32).toString('hex'), // Generate random password for Google users
             });
             await user.save();
         } else {
-            // Update existing user with Google ID if not present
+            // Update existing user with Google ID and profile picture if not present
             if (!user.googleId) {
                 user.googleId = googleId;
                 user.isVerified = true;
+                // Only update profile picture if user doesn't have one or if it's from Google
+                if (!user.profilePicture) {
+                    user.profilePicture = picture;
+                }
                 await user.save();
             }
         }
@@ -942,6 +997,23 @@ const googleSignIn = async (req, res) => {
             role: user.role,
             isVerified: user.isVerified,
             googleId: user.googleId,
+            profilePicture: user.profilePicture,
+            phone: user.phone,
+            location: user.location,
+            bio: user.bio,
+            occupation: user.occupation,
+            company: user.company,
+            workSchedule: user.workSchedule,
+            preferredLocation: user.preferredLocation,
+            budget: user.budget,
+            roomType: user.roomType,
+            genderPreference: user.genderPreference,
+            lifestyle: user.lifestyle,
+            cleanliness: user.cleanliness,
+            noiseLevel: user.noiseLevel,
+            smoking: user.smoking,
+            pets: user.pets,
+            amenities: user.amenities,
             createdAt: user.createdAt,
             updatedAt: user.updatedAt
         };
@@ -958,6 +1030,83 @@ const googleSignIn = async (req, res) => {
   }
 };
 
+// Upload profile picture
+const uploadProfilePicture = async (req, res) => {
+    try {
+        if (!req.file) {
+            return res.status(400).json({ message: 'No image file provided' });
+        }
+
+        const userId = req.user?.id; // From JWT token
+
+        if (!userId) {
+            return res.status(401).json({ message: 'Authentication required' });
+        }
+
+        // Find user
+        const user = await User.findById(userId);
+        if (!user) {
+            return res.status(404).json({ message: 'User not found' });
+        }
+
+        // Convert buffer to base64
+        const b64 = Buffer.from(req.file.buffer).toString('base64');
+        const dataURI = `data:${req.file.mimetype};base64,${b64}`;
+
+        // Upload to Cloudinary
+        const result = await cloudinary.uploader.upload(dataURI, {
+            folder: 'lyvo-profile-pictures',
+            transformation: [
+                { width: 400, height: 400, crop: 'fill', gravity: 'face' },
+                { quality: 'auto', fetch_format: 'auto' }
+            ]
+        });
+
+        // Update user profile picture
+        user.profilePicture = result.secure_url;
+        await user.save();
+
+        // Omit password from response
+        const userResponse = {
+            _id: user._id,
+            name: user.name,
+            email: user.email,
+            role: user.role,
+            isVerified: user.isVerified,
+            googleId: user.googleId,
+            profilePicture: user.profilePicture,
+            phone: user.phone,
+            location: user.location,
+            bio: user.bio,
+            occupation: user.occupation,
+            company: user.company,
+            workSchedule: user.workSchedule,
+            preferredLocation: user.preferredLocation,
+            budget: user.budget,
+            roomType: user.roomType,
+            genderPreference: user.genderPreference,
+            lifestyle: user.lifestyle,
+            cleanliness: user.cleanliness,
+            noiseLevel: user.noiseLevel,
+            smoking: user.smoking,
+            pets: user.pets,
+            amenities: user.amenities,
+            createdAt: user.createdAt,
+            updatedAt: user.updatedAt
+        };
+
+        res.status(200).json({ 
+            message: 'Profile picture uploaded successfully',
+            user: userResponse,
+            imageUrl: result.secure_url
+        });
+
+    } catch (error) {
+        console.error('Profile picture upload error:', error);
+        res.status(500).json({ message: 'Server error during profile picture upload' });
+    }
+};
+
 module.exports = {
     getAllUsers,
     registerUser,
@@ -969,4 +1118,6 @@ module.exports = {
     updateUserProfile,
     changePassword,
     googleSignIn,
+    uploadProfilePicture,
+    upload, // Export multer upload middleware
 }; 

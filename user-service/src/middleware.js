@@ -20,6 +20,7 @@ const verifyJWT = async (req, res, next) => {
     try {
         // 5. Verify the token using JWT_SECRET
         const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        
         // 6. Check if the decoded token exists and has an id
         if (!decoded || !decoded.id) {
             // If not, respond with 401 and token expired message
