@@ -121,6 +121,18 @@ const userSchema = new mongoose.Schema({
         type: Date,
         default: null,
     },
+    // Behaviour onboarding flags
+    isNewUser: { type: Boolean, default: true },
+    hasCompletedBehaviorQuestions: { type: Boolean, default: false },
 }, { timestamps: true });
 
 module.exports = mongoose.model('User', userSchema); 
+ 
+// Behaviour answers schema and model
+const behaviourAnswersSchema = new mongoose.Schema({
+  userId: { type: mongoose.Schema.Types.ObjectId, required: true, index: true, unique: true },
+  answers: { type: Object, default: {} },
+  completedAt: { type: Date, default: Date.now }
+}, { timestamps: true });
+
+module.exports.BehaviourAnswers = mongoose.model('BehaviourAnswers', behaviourAnswersSchema);

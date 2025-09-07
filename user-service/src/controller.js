@@ -1,7 +1,9 @@
 // controller.js
 // User controller functions (replace with real DB logic later)
 const { JsonWebTokenError } = require('jsonwebtoken');
-const User = require('./model');
+const UserModel = require('./model');
+const User = UserModel; // retain existing references
+const { BehaviourAnswers } = require('./model');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const sgMail = require('@sendgrid/mail');
@@ -1108,6 +1110,59 @@ const uploadProfilePicture = async (req, res) => {
 };
 
 module.exports = {
+    // Save behaviour answers and mark onboarding complete
+    saveBehaviourAnswers: async (req, res) => {
+        try {
+            const userId = req.user.id;
+            const { answers } = req.body || {};
+            if (!answers || typeof answers !== 'object') {
+                return res.status(400).json({ message: 'answers required' });
+            }
+            await BehaviourAnswers.findOneAndUpdate(
+                { userId },
+                { answers, completedAt: new Date() },
+                { upsert: true, new: true }
+            );
+            await User.findByIdAndUpdate(userId, { isNewUser: false, hasCompletedBehaviorQuestions: true });
+            res.json({ message: 'Saved' });
+        } catch (e) {
+            console.error('saveBehaviourAnswers error:', e);
+            res.status(500).json({ message: 'Server error' });
+        }
+    },
+    // Get behaviour questions (static list here)
+    getBehaviourQuestions: async (req, res) => {
+        const questions = [
+            { id: 'dailyRoutine', text: "What’s your daily routine like?", options: ['Night Owl', 'Early Riser', 'Flexible'] },
+            { id: 'socialLevel', text: 'How social are you?', options: ['Prefer private, less interaction', 'Enjoy occasional socializing', 'Very outgoing'] },
+            { id: 'smokeDrink', text: 'Do you smoke/drink?', options: ['Yes', 'No'] },
+            { id: 'cleanliness', text: 'How do you prefer your living space?', options: ['Very clean & organized', 'Average clean', 'Not too strict about it'] },
+            { id: 'foodType', text: 'Your food type?', options: ['Vegetarian', 'Non-Vegetarian', 'Vegan'] },
+            { id: 'foodSource', text: 'Do you cook or order food?', options: ['Cook myself', 'Order outside', 'Mix of both'] },
+            { id: 'noisePref', text: 'Do you prefer a quiet or lively place?', options: ['Quiet', 'Don’t mind some noise'] },
+            { id: 'privacyLevel', text: 'How much personal space do you need?', options: ['High privacy', 'Balanced', 'Don’t mind sharing'] },
+            { id: 'budget', text: 'Budget range (₹ per month)?', type: 'range', min: 2000, max: 15000 },
+            { id: 'stayDuration', text: 'How long do you plan to stay?', options: ['Short-term (up to 6 months)', 'Long-term (6+ months)'] },
+            { id: 'visitorRules', text: 'Do you prefer strict visitor rules?', options: ['Yes', 'No'] },
+            { id: 'compatOnly', text: 'Show only compatible roommates?', options: ['Yes', 'No'] }
+        ];
+        res.json({ questions });
+    },
+    // Check if user already completed behaviour onboarding
+    getBehaviourStatus: async (req, res) => {
+        try {
+            const userId = req.user.id;
+            const existing = await BehaviourAnswers.findOne({ userId }).lean();
+            const completed = !!existing;
+            // Also reflect from user flags if available
+            const user = await User.findById(userId).select('isNewUser hasCompletedBehaviorQuestions').lean();
+            const finalCompleted = completed || (user?.hasCompletedBehaviorQuestions === true);
+            return res.json({ completed: finalCompleted, userFlags: user });
+        } catch (e) {
+            console.error('getBehaviourStatus error:', e);
+            return res.status(500).json({ message: 'Server error' });
+        }
+    },
     getAllUsers,
     registerUser,
     verifyEmail,
