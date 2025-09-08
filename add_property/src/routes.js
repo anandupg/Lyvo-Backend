@@ -5,6 +5,7 @@ const fs = require('fs');
 const { createClient } = require('@supabase/supabase-js');
 const jwt = require('jsonwebtoken');
 const { addProperty, getProperties, getProperty } = require('./controller');
+const axios = require('axios');
 
 const router = express.Router();
 
@@ -32,6 +33,9 @@ const upload = multer({
 const supabase = (process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY)
   ? createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY)
   : null;
+
+// User-service base URL (for KYC/role checks)
+const USER_SERVICE_URL = process.env.USER_SERVICE_URL || 'http://localhost:4002/api';
 
 // Auth middleware order of precedence:
 // 1) Explicit Mongo user id via x-user-id header
@@ -81,8 +85,66 @@ const authenticateUser = async (req, res, next) => {
   }
 };
 
+// Ensure the requester is an Owner and has uploaded govt ID (KYC)
+const ensureOwnerKYC = async (req, res, next) => {
+  try {
+    const userId = req.user?.id;
+    if (!userId) {
+      return res.status(401).json({ success: false, message: 'User not authenticated' });
+    }
+
+    // Forward Authorization header if available to user-service
+    const headers = {};
+    if (req.headers.authorization) headers['Authorization'] = req.headers.authorization;
+
+    // Fetch user profile from user-service
+    const url = `${USER_SERVICE_URL}/user/profile/${userId}`;
+    const { data: user } = await axios.get(url, { headers });
+
+    // Basic role/verification checks
+    const isOwner = Number(user?.role) === 3;
+    const isEmailVerified = user?.isVerified === true;
+    
+    // KYC checks: accept admin-approved KYC with at least one document present
+    const hasGovtIdFront = Boolean(user?.govtIdFrontUrl);
+    const hasGovtIdBack = Boolean(user?.govtIdBackUrl);
+    const hasAnyKycDoc = hasGovtIdFront || hasGovtIdBack;
+    const adminApproved = user?.kycVerified === true || user?.kycStatus === 'approved';
+    const isKycVerified = adminApproved && hasAnyKycDoc;
+
+    if (!isOwner) {
+      return res.status(403).json({ success: false, message: 'Only property owners can add properties' });
+    }
+
+    if (!isEmailVerified) {
+      return res.status(403).json({ success: false, message: 'Verify your email before adding properties' });
+    }
+
+    if (!isKycVerified) {
+      return res.status(403).json({ success: false, message: 'Upload and get your Government ID approved by admin before adding a property' });
+    }
+
+    return next();
+  } catch (error) {
+    console.error('ensureOwnerKYC error:', {
+      message: error?.message,
+      status: error?.response?.status,
+      data: error?.response?.data,
+      url: error?.config?.url
+    });
+    // If user-service says unauthorized/forbidden, bubble up
+    if (error?.response?.status === 401) {
+      return res.status(401).json({ success: false, message: 'Authentication required' });
+    }
+    if (error?.response?.status === 403) {
+      return res.status(403).json({ success: false, message: 'Access denied' });
+    }
+    return res.status(500).json({ success: false, message: 'Failed to validate owner KYC', details: error?.response?.data || null });
+  }
+};
+
 // Routes
-router.post('/properties/add', authenticateUser, upload.any(), addProperty);
+router.post('/properties/add', authenticateUser, ensureOwnerKYC, upload.any(), addProperty);
 router.get('/properties', authenticateUser, getProperties);
 router.get('/properties/:id', authenticateUser, getProperty);
 

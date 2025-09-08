@@ -3,7 +3,7 @@
 const { JsonWebTokenError } = require('jsonwebtoken');
 const UserModel = require('./model');
 const User = UserModel; // retain existing references
-const { BehaviourAnswers } = require('./model');
+const { BehaviourAnswers, KycDocument } = require('./model');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const sgMail = require('@sendgrid/mail');
@@ -44,9 +44,43 @@ if (process.env.SENDGRID_API_KEY) {
 // Initialize Google OAuth client
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
-// Example: Get all users
-const getAllUsers = (req, res) => {
-    res.json({ message: 'Get all users (implement DB logic here)' });
+// Get all users (admin only)
+const getAllUsers = async (req, res) => {
+    try {
+        const requesterId = req.user?.id;
+        const requester = await User.findById(requesterId).lean();
+        if (!requester || requester.role !== 2) {
+            return res.status(403).json({ message: 'Admin access required' });
+        }
+
+        const { page = 1, limit = 50, search = '' } = req.query;
+        const p = Math.max(parseInt(page) || 1, 1);
+        const l = Math.min(Math.max(parseInt(limit) || 50, 1), 200);
+
+        const query = search
+            ? {
+                $or: [
+                    { name: { $regex: search, $options: 'i' } },
+                    { email: { $regex: search, $options: 'i' } },
+                    { phone: { $regex: search, $options: 'i' } },
+                ]
+              }
+            : {};
+
+        const [items, total] = await Promise.all([
+            User.find(query).select('-password').sort({ createdAt: -1 }).skip((p - 1) * l).limit(l).lean(),
+            User.countDocuments(query)
+        ]);
+
+        return res.json({
+            success: true,
+            data: items,
+            pagination: { page: p, limit: l, total, pages: Math.ceil(total / l) }
+        });
+    } catch (e) {
+        console.error('getAllUsers error:', e);
+        return res.status(500).json({ message: 'Server error' });
+    }
 };
 
 // Register a new user
@@ -1175,4 +1209,131 @@ module.exports = {
     googleSignIn,
     uploadProfilePicture,
     upload, // Export multer upload middleware
+    // KYC: owner uploads govt ID front/back images
+    uploadKycDocuments: async (req, res) => {
+        try {
+            const userId = req.user?.id;
+            if (!userId) return res.status(401).json({ message: 'Authentication required' });
+
+            const user = await User.findById(userId);
+            if (!user) return res.status(404).json({ message: 'User not found' });
+
+            // Accept a single image. Prefer a generic field name 'image'; maintain compatibility with 'front'/'back'
+            const files = req.files || [];
+            let file = null;
+            let side = null; // 'front' or 'back' or null when generic
+            if (Array.isArray(files)) {
+                file = files[0] || null;
+            }
+            if (!file && files.front && files.front[0]) {
+                file = files.front[0];
+                side = 'front';
+            }
+            if (!file && files.back && files.back[0]) {
+                file = files.back[0];
+                side = 'back';
+            }
+            if (!file) {
+                return res.status(400).json({ message: 'Please upload one image' });
+            }
+
+            // Optional metadata
+            const { idType, idNumber } = req.body || {};
+
+            const uploadBufferToCloudinary = async (file) => {
+                const b64 = Buffer.from(file.buffer).toString('base64');
+                const dataURI = `data:${file.mimetype};base64,${b64}`;
+                const result = await cloudinary.uploader.upload(dataURI, {
+                    folder: 'lyvo-kyc-docs',
+                    transformation: [
+                        { width: 1600, height: 1600, crop: 'limit' },
+                        { quality: 'auto', fetch_format: 'auto' }
+                    ]
+                });
+                return result.secure_url;
+            };
+
+            const updates = {};
+            const uploadedUrl = await uploadBufferToCloudinary(file);
+            // If caller did not specify side, choose automatically: fill front first then back
+            if (!side) {
+                if (!user.govtIdFrontUrl) side = 'front'; else side = 'back';
+            }
+            if (side === 'front') updates.govtIdFrontUrl = uploadedUrl; else updates.govtIdBackUrl = uploadedUrl;
+            if (idType) updates.govtIdType = String(idType);
+            if (idNumber) updates.govtIdNumber = String(idNumber);
+
+            // When user uploads, set status to pending and reset verification
+            updates.kycStatus = 'pending';
+            updates.kycVerified = false;
+            updates.kycReviewedAt = null;
+            updates.kycReviewedBy = null;
+
+            // Upsert KYC Document record in its own collection
+            await KycDocument.findOneAndUpdate(
+                { userId },
+                {
+                    $set: {
+                        idType: updates.govtIdType || user.govtIdType || null,
+                        idNumber: updates.govtIdNumber || user.govtIdNumber || null,
+                        frontUrl: (side === 'front' ? uploadedUrl : user.govtIdFrontUrl) || null,
+                        backUrl: (side === 'back' ? uploadedUrl : user.govtIdBackUrl) || null,
+                        status: 'pending',
+                        reviewedAt: null,
+                        reviewedBy: null
+                    }
+                },
+                { upsert: true, new: true }
+            );
+
+            const updated = await User.findByIdAndUpdate(userId, { $set: updates }, { new: true }).select('-password');
+
+            return res.json({ message: 'KYC documents uploaded', user: updated });
+        } catch (e) {
+            console.error('uploadKycDocuments error:', e);
+            return res.status(500).json({ message: 'Server error' });
+        }
+    },
+    // Admin verifies/rejects KYC
+    adminReviewKyc: async (req, res) => {
+        try {
+            const adminId = req.user?.id;
+            if (!adminId) return res.status(401).json({ message: 'Authentication required' });
+            const admin = await User.findById(adminId);
+            if (!admin || admin.role !== 2) return res.status(403).json({ message: 'Admin access required' });
+
+            const { userId, action } = req.body || {};
+            if (!userId || !['approve', 'reject'].includes(action)) {
+                return res.status(400).json({ message: 'userId and action (approve|reject) are required' });
+            }
+
+            const user = await User.findById(userId);
+            if (!user) return res.status(404).json({ message: 'User not found' });
+
+            const update = {
+                kycStatus: action === 'approve' ? 'approved' : 'rejected',
+                kycVerified: action === 'approve',
+                kycReviewedAt: new Date(),
+                kycReviewedBy: adminId,
+            };
+
+            const updated = await User.findByIdAndUpdate(userId, { $set: update }, { new: true }).select('-password');
+            // Mirror status into KycDocument
+            await KycDocument.findOneAndUpdate(
+                { userId },
+                {
+                    $set: {
+                        status: action === 'approve' ? 'approved' : 'rejected',
+                        reviewedAt: new Date(),
+                        reviewedBy: adminId
+                    }
+                },
+                { new: true }
+            );
+            return res.json({ message: `KYC ${action}d`, user: updated });
+        } catch (e) {
+            console.error('adminReviewKyc error:', e);
+            return res.status(500).json({ message: 'Server error' });
+        }
+    }
 }; 
