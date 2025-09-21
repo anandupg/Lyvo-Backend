@@ -1335,5 +1335,56 @@ module.exports = {
             console.error('adminReviewKyc error:', e);
             return res.status(500).json({ message: 'Server error' });
         }
+    },
+
+    // Admin toggle user active status
+    toggleUserStatus: async (req, res) => {
+        try {
+            const adminId = req.user?.id;
+            if (!adminId) return res.status(401).json({ message: 'Authentication required' });
+            const admin = await User.findById(adminId);
+            if (!admin || admin.role !== 2) return res.status(403).json({ message: 'Admin access required' });
+
+            const { userId } = req.params;
+            if (!userId) return res.status(400).json({ message: 'User ID is required' });
+
+            const user = await User.findById(userId);
+            if (!user) return res.status(404).json({ message: 'User not found' });
+
+            // Toggle the isActive status
+            const newStatus = !user.isActive;
+            const updated = await User.findByIdAndUpdate(
+                userId, 
+                { $set: { isActive: newStatus, statusUpdatedAt: new Date(), statusUpdatedBy: adminId } }, 
+                { new: true }
+            ).select('-password');
+
+            return res.json({ 
+                message: `User ${newStatus ? 'activated' : 'deactivated'} successfully`, 
+                user: updated 
+            });
+        } catch (e) {
+            console.error('toggleUserStatus error:', e);
+            return res.status(500).json({ message: 'Server error' });
+        }
+    },
+
+    // Check if email exists (public endpoint for real-time validation)
+    checkEmailExists: async (req, res) => {
+        try {
+            const { email } = req.query;
+            if (!email) {
+                return res.status(400).json({ message: 'Email is required' });
+            }
+
+            const user = await User.findOne({ email: email.toLowerCase().trim() });
+            return res.json({ 
+                exists: !!user,
+                message: user ? 'Email already registered' : 'Email is available'
+            });
+        } catch (e) {
+            console.error('checkEmailExists error:', e);
+            return res.status(500).json({ message: 'Server error' });
+        }
     }
 }; 
