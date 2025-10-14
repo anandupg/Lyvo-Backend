@@ -16,11 +16,9 @@ dotenv.config();
 // MongoDB connection
 const connectdb = async () => {
   try {
-    if (!process.env.MONGO_URI) {
-      throw new Error('MONGO_URI is not set in environment variables');
-    }
-    await mongoose.connect(process.env.MONGO_URI);
-    console.log('MongoDB connected');
+    const mongoUri = process.env.MONGO_URI || 'mongodb://localhost:27017/lyvo';
+    await mongoose.connect(mongoUri);
+    console.log('MongoDB connected to:', mongoUri);
   } catch (error) {
     console.error('MongoDB connection error:', error);
     process.exit(1);

@@ -4,7 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const { createClient } = require('@supabase/supabase-js');
 const jwt = require('jsonwebtoken');
-const { addProperty, getProperties, getProperty, getApprovedPropertiesPublic, getApprovedPropertyPublic, updateRoomStatus, updateRoom, updateProperty } = require('./controller');
+const { addProperty, getProperties, getProperty, getPropertyAdmin, getApprovedPropertiesPublic, getApprovedPropertyPublic, updateRoomStatus, updateRoom, updateProperty, getAllPropertiesAdmin, approveRoomAdmin, approvePropertyAdmin, getRoomPublic, getAllRoomsDebug, createBookingPublic, listOwnerBookings, getBookingDetails, getAllBookingsDebug, lookupBookingDetails, updateBookingStatus, createPaymentOrder, verifyPaymentAndCreateBooking } = require('./controller');
 const axios = require('axios');
 
 const router = express.Router();
@@ -46,8 +46,15 @@ const authenticateUser = async (req, res, next) => {
     const authHeader = req.headers.authorization;
     const fallbackUserId = req.headers['x-user-id'];
 
+    console.log('=== AUTHENTICATION DEBUG ===');
+    console.log('Auth header:', authHeader);
+    console.log('Fallback user ID:', fallbackUserId);
+    console.log('JWT Secret available:', !!process.env.USER_JWT_SECRET);
+    console.log('JWT_SECRET available:', !!process.env.JWT_SECRET);
+
     // Prefer explicit Mongo user id if provided
     if (fallbackUserId) {
+      console.log('Using fallback user ID:', fallbackUserId);
       req.user = { id: String(fallbackUserId) };
       return next();
     }
@@ -56,15 +63,23 @@ const authenticateUser = async (req, res, next) => {
     if (authHeader && authHeader.startsWith('Bearer ')) {
       const token = authHeader.substring(7);
       const secret = process.env.USER_JWT_SECRET || process.env.JWT_SECRET || process.env.USER_SERVICE_JWT_SECRET;
+      console.log('Token received:', token.substring(0, 20) + '...');
+      console.log('Secret available:', !!secret);
+      
       if (secret) {
         try {
           const payload = jwt.verify(token, secret);
+          console.log('JWT payload:', payload);
           const mongoId = payload?._id || payload?.id || payload?.userId || payload?.sub;
+          console.log('Mongo ID extracted:', mongoId);
+          
           if (mongoId) {
             req.user = { id: String(mongoId) };
+            console.log('Authentication successful with Mongo ID:', mongoId);
             return next();
           }
-        } catch (_) {
+        } catch (jwtError) {
+          console.log('JWT verification failed:', jwtError.message);
           // Ignore and continue to Supabase verification
         }
       }
@@ -181,9 +196,23 @@ const addPropertyUpload = multer({
   { name: 'documents', maxCount: 10 }
 ]);
 
+// Test authentication endpoint
+router.post('/test-auth', authenticateUser, (req, res) => {
+  res.json({ 
+    success: true, 
+    message: 'Authentication successful',
+    user: req.user 
+  });
+});
+
 router.post('/properties/add', authenticateUser, addPropertyUpload, addProperty);
 router.get('/properties', authenticateUser, getProperties);
 router.get('/properties/:id', authenticateUser, getProperty);
+// Admin endpoints
+router.get('/admin/properties/:id', authenticateUser, getPropertyAdmin);
+router.get('/admin/properties', authenticateUser, getAllPropertiesAdmin);
+router.post('/admin/properties/:id/approval', authenticateUser, approvePropertyAdmin);
+router.post('/admin/rooms/:roomId/approval', authenticateUser, approveRoomAdmin);
 
 // Room management routes
 router.patch('/rooms/:roomId/status', authenticateUser, updateRoomStatus);
@@ -205,5 +234,20 @@ router.patch('/properties/:id', authenticateUser, updateProperty);
 // Public routes (no authentication required)
 router.get('/public/properties', getApprovedPropertiesPublic);
 router.get('/public/properties/:id', getApprovedPropertyPublic);
+router.get('/public/rooms/:roomId', getRoomPublic);
+router.get('/debug/rooms', getAllRoomsDebug);
+
+// Payment routes
+router.post('/payments/create-order', createPaymentOrder);
+router.post('/payments/verify', verifyPaymentAndCreateBooking);
+
+// Booking routes
+router.post('/bookings', createBookingPublic);
+router.get('/owner/bookings', authenticateUser, listOwnerBookings);
+router.get('/bookings/:bookingId', authenticateUser, getBookingDetails);
+router.get('/public/bookings/:bookingId', getBookingDetails);
+router.get('/debug/bookings', getAllBookingsDebug);
+router.get('/bookings/lookup', lookupBookingDetails);
+router.post('/bookings/:bookingId/status', authenticateUser, updateBookingStatus);
 
 module.exports = router;

@@ -1,0 +1,60 @@
+const mongoose = require('mongoose');
+
+const bookingSchema = new mongoose.Schema({
+  userId: { type: String, required: true, index: true },
+  ownerId: { type: String, required: true, index: true },
+  propertyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Property', required: true, index: true },
+  roomId: { type: mongoose.Schema.Types.ObjectId, ref: 'Room', required: true, index: true },
+  status: { type: String, enum: ['pending', 'confirmed', 'cancelled', 'payment_pending', 'payment_completed'], default: 'payment_pending', index: true },
+  bookedAt: { type: Date, default: Date.now },
+
+  // Payment Information
+  payment: {
+    totalAmount: { type: Number, required: true },
+    securityDeposit: { type: Number, required: true },
+    monthlyRent: { type: Number, required: true },
+    currency: { type: String, default: 'INR' },
+    razorpayOrderId: { type: String, default: null },
+    razorpayPaymentId: { type: String, default: null },
+    razorpaySignature: { type: String, default: null },
+    paymentStatus: { type: String, enum: ['pending', 'completed', 'failed', 'refunded'], default: 'pending' },
+    paymentMethod: { type: String, default: 'razorpay' },
+    paidAt: { type: Date, default: null }
+  },
+
+  // Snapshot fields (denormalized for historical accuracy and faster reads)
+  userSnapshot: {
+    name: String,
+    email: String,
+    phone: String,
+  },
+  ownerSnapshot: {
+    name: String,
+    email: String,
+    phone: String,
+  },
+  propertySnapshot: {
+    name: String,
+    address: Object,
+    latitude: Number,
+    longitude: Number,
+    security_deposit: Number,
+  },
+  roomSnapshot: {
+    roomNumber: Number,
+    roomType: String,
+    roomSize: Number,
+    bedType: String,
+    occupancy: Number,
+    rent: Number,
+    amenities: Object,
+    images: {
+      room: String,
+      toilet: String,
+    }
+  }
+}, { timestamps: true });
+
+module.exports = mongoose.model('Booking', bookingSchema);
+
+

@@ -16,6 +16,9 @@ router.get('/user/check-email', checkEmailExists);
 router.get('/user/users', verifyJWT, getAllUsers);
 router.get('/user/profile/:userId', verifyJWT, getUserProfile);
 router.put('/user/profile/:userId', verifyJWT, updateUserProfile);
+
+// Public routes for service-to-service communication
+router.get('/public/user/:userId', getUserProfile);
 router.post('/user/change-password', verifyJWT, changePassword);
 router.post('/user/upload-profile-picture', verifyJWT, upload.single('profilePicture'), uploadProfilePicture);
 // KYC endpoints (accept one image at a time under field 'image', but remain compatible with 'front'/'back')
