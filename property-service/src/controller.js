@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const cloudinary = require('cloudinary').v2;
 const path = require('path');
 const Razorpay = require('razorpay');
+const axios = require('axios');
 
 // Room Schema for individual rooms
 const roomSchema = new mongoose.Schema({
@@ -106,6 +107,7 @@ const propertySchema = new mongoose.Schema({
 const Property = mongoose.models.Property || mongoose.model('Property', propertySchema);
 const Room = mongoose.models.Room || mongoose.model('Room', roomSchema);
 const Booking = require('./models/Booking');
+const Favorite = require('./models/Favorite');
 
 // Cloudinary config
 cloudinary.config({
@@ -1344,7 +1346,7 @@ const verifyPaymentAndCreateBooking = async (req, res) => {
       ownerId: String(property.owner_id),
       propertyId: property._id,
       roomId: room._id,
-      status: 'payment_completed',
+      status: 'pending_approval',
       payment: {
         totalAmount: monthlyRent + securityDeposit,
         securityDeposit,
@@ -1380,7 +1382,7 @@ const verifyPaymentAndCreateBooking = async (req, res) => {
 
     res.status(201).json({ 
       success: true, 
-      message: 'Payment verified and booking created successfully',
+      message: 'Payment verified and booking created. Waiting for owner approval.',
       booking,
       paymentDetails: {
         orderId: razorpay_order_id,
@@ -1498,6 +1500,414 @@ const listOwnerBookings = async (req, res) => {
   }
 };
 
+// Get Bookings Pending Approval for Owner (Protected)
+const getPendingApprovalBookings = async (req, res) => {
+  try {
+    const ownerId = req.user?.id;
+    if (!ownerId) {
+      return res.status(401).json({ success: false, message: 'Unauthorized' });
+    }
+    
+    const pendingBookings = await Booking.find({ 
+      ownerId: String(ownerId), 
+      status: 'pending_approval' 
+    }).sort({ createdAt: -1 });
+    
+    return res.json({ 
+      success: true, 
+      bookings: pendingBookings,
+      count: pendingBookings.length,
+      message: `Found ${pendingBookings.length} bookings pending approval`
+    });
+  } catch (error) {
+    console.error('Get pending approval bookings error:', error);
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
+// Check if user has pending booking for a specific room (Public)
+const checkUserBookingStatus = async (req, res) => {
+  try {
+    const { userId, roomId } = req.query;
+    
+    if (!userId || !roomId) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'userId and roomId are required' 
+      });
+    }
+
+    // Check for any existing booking for this user and room
+    const existingBooking = await Booking.findOne({
+      userId: String(userId),
+      roomId: roomId,
+      status: { $in: ['pending_approval', 'confirmed', 'payment_pending'] }
+    }).sort({ createdAt: -1 });
+
+    if (existingBooking) {
+      return res.json({
+        success: true,
+        hasBooking: true,
+        booking: existingBooking,
+        status: existingBooking.status,
+        message: `User has a ${existingBooking.status} booking for this room`
+      });
+    }
+
+    return res.json({
+      success: true,
+      hasBooking: false,
+      message: 'No existing booking found for this user and room'
+    });
+
+  } catch (error) {
+    console.error('Check user booking status error:', error);
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
+// Get user bookings with room and property details (Public)
+const getUserBookings = async (req, res) => {
+  try {
+    const { userId } = req.query;
+    
+    if (!userId) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'userId is required' 
+      });
+    }
+
+    // Get all bookings for the user with populated room and property details
+    const bookings = await Booking.find({ userId: String(userId) })
+      .populate('roomId', 'roomNumber rent amenities room_image toilet_image isAvailable roomType room_type bed_type occupancy room_size description')
+      .populate('propertyId', 'propertyName address latitude longitude images amenities propertyType ownerName property_name description owner_id')
+      .sort({ createdAt: -1 });
+
+    // Fetch owner details for all unique owner IDs
+    const ownerIds = [...new Set(bookings.map(b => b.propertyId?.owner_id).filter(Boolean))];
+    const ownerDetailsMap = {};
+    
+    // Fetch owner details from user service
+    if (ownerIds.length > 0) {
+      const userServiceUrl = process.env.USER_SERVICE_URL || 'http://localhost:4002/api';
+      for (const ownerId of ownerIds) {
+        try {
+          const url = `${userServiceUrl}/public/user/${ownerId}`;
+          console.log(`Fetching owner details from: ${url}`);
+          const ownerResponse = await axios.get(url);
+          
+          if (ownerResponse.data) {
+            // The API returns user data directly, not wrapped in { user: ... }
+            const userData = ownerResponse.data;
+            ownerDetailsMap[ownerId] = {
+              name: userData.name || 'Owner',
+              email: userData.email || '',
+              phone: userData.phone || userData.phoneNumber || ''
+            };
+            console.log(`Successfully fetched owner ${ownerId}:`, ownerDetailsMap[ownerId]);
+          }
+        } catch (error) {
+          console.error(`Error fetching owner ${ownerId}:`, error.response?.status, error.response?.data || error.message);
+          // Even if fetch fails, add a placeholder to avoid undefined errors
+          ownerDetailsMap[ownerId] = {
+            name: 'Owner',
+            email: '',
+            phone: ''
+          };
+        }
+      }
+    }
+
+    // Transform the data to include room and property details
+    const bookingsWithDetails = bookings.map(booking => ({
+      _id: booking._id,
+      userId: booking.userId,
+      roomId: booking.roomId,
+      propertyId: booking.propertyId,
+      ownerId: booking.ownerId,
+      status: booking.status,
+      checkInDate: booking.checkInDate,
+      checkOutDate: booking.checkOutDate,
+      totalAmount: booking.totalAmount,
+      securityDeposit: booking.securityDeposit,
+      monthlyRent: booking.monthlyRent,
+      payment: booking.payment,
+      approvedAt: booking.approvedAt,
+      approvedBy: booking.approvedBy,
+      createdAt: booking.createdAt,
+      updatedAt: booking.updatedAt,
+      // Room details
+      room: booking.roomId ? {
+        _id: booking.roomId._id,
+        roomNumber: booking.roomId.roomNumber || booking.roomId.room_number,
+        rent: booking.roomId.rent,
+        amenities: booking.roomId.amenities,
+        images: booking.roomId.room_image ? [booking.roomId.room_image] : [],
+        roomImage: booking.roomId.room_image,
+        toiletImage: booking.roomId.toilet_image,
+        isAvailable: booking.roomId.isAvailable || booking.roomId.is_available,
+        roomType: booking.roomId.roomType || booking.roomId.room_type,
+        bedType: booking.roomId.bed_type,
+        occupancy: booking.roomId.occupancy,
+        roomSize: booking.roomId.room_size,
+        description: booking.roomId.description
+      } : null,
+      // Property details
+      property: booking.propertyId ? {
+        _id: booking.propertyId._id,
+        propertyName: booking.propertyId.propertyName || booking.propertyId.property_name,
+        address: booking.propertyId.address,
+        latitude: booking.propertyId.latitude,
+        longitude: booking.propertyId.longitude,
+        images: booking.propertyId.images || [],
+        amenities: booking.propertyId.amenities,
+        propertyType: booking.propertyId.propertyType,
+        ownerName: ownerDetailsMap[booking.propertyId.owner_id]?.name || booking.propertyId.ownerName,
+        ownerEmail: ownerDetailsMap[booking.propertyId.owner_id]?.email,
+        ownerPhone: ownerDetailsMap[booking.propertyId.owner_id]?.phone,
+        description: booking.propertyId.description
+      } : null
+    }));
+
+    return res.json({
+      success: true,
+      bookings: bookingsWithDetails,
+      count: bookingsWithDetails.length,
+      message: `Found ${bookingsWithDetails.length} bookings for user`
+    });
+
+  } catch (error) {
+    console.error('Get user bookings error:', error);
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
+// ==================== FAVORITES API ====================
+
+// Add property/room to favorites (Public)
+const addToFavorites = async (req, res) => {
+  try {
+    const { userId, propertyId, roomId, notes, tags } = req.body;
+    
+    if (!userId || !propertyId) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'userId and propertyId are required' 
+      });
+    }
+
+    // Check if already favorited
+    const existingFavorite = await Favorite.findOne({
+      userId: String(userId),
+      propertyId: propertyId,
+      roomId: roomId || null
+    });
+
+    if (existingFavorite) {
+      return res.status(400).json({
+        success: false,
+        message: 'Already added to favorites'
+      });
+    }
+
+    // Create new favorite
+    const favorite = new Favorite({
+      userId: String(userId),
+      propertyId: propertyId,
+      roomId: roomId || null,
+      notes: notes || '',
+      tags: tags || []
+    });
+
+    await favorite.save();
+
+    return res.json({
+      success: true,
+      message: 'Added to favorites successfully',
+      favorite: favorite
+    });
+
+  } catch (error) {
+    console.error('Add to favorites error:', error);
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
+// Remove property/room from favorites (Public)
+const removeFromFavorites = async (req, res) => {
+  try {
+    const { userId, propertyId, roomId } = req.body;
+    
+    if (!userId || !propertyId) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'userId and propertyId are required' 
+      });
+    }
+
+    const favorite = await Favorite.findOneAndDelete({
+      userId: String(userId),
+      propertyId: propertyId,
+      roomId: roomId || null
+    });
+
+    if (!favorite) {
+      return res.status(404).json({
+        success: false,
+        message: 'Favorite not found'
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: 'Removed from favorites successfully'
+    });
+
+  } catch (error) {
+    console.error('Remove from favorites error:', error);
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
+// Get user favorites with property and room details (Public)
+const getUserFavorites = async (req, res) => {
+  try {
+    const { userId } = req.query;
+    
+    if (!userId) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'userId is required' 
+      });
+    }
+
+    // Get all favorites for the user with populated property and room details
+    const favorites = await Favorite.find({ userId: String(userId) })
+      .populate('propertyId', 'propertyName address latitude longitude images amenities propertyType ownerName property_name description owner_id')
+      .populate('roomId', 'roomNumber rent amenities room_image toilet_image isAvailable roomType room_type bed_type occupancy room_size description')
+      .sort({ addedAt: -1 });
+
+    // Fetch owner details for all unique owner IDs
+    const ownerIds = [...new Set(favorites.map(f => f.propertyId?.owner_id).filter(Boolean))];
+    const ownerDetailsMap = {};
+    
+    // Fetch owner details from user service
+    if (ownerIds.length > 0) {
+      const userServiceUrl = process.env.USER_SERVICE_URL || 'http://localhost:4002/api';
+      for (const ownerId of ownerIds) {
+        try {
+          const url = `${userServiceUrl}/public/user/${ownerId}`;
+          console.log(`Fetching owner details from: ${url}`);
+          const ownerResponse = await axios.get(url);
+          
+          if (ownerResponse.data) {
+            // The API returns user data directly, not wrapped in { user: ... }
+            const userData = ownerResponse.data;
+            ownerDetailsMap[ownerId] = {
+              name: userData.name || 'Owner',
+              email: userData.email || '',
+              phone: userData.phone || userData.phoneNumber || ''
+            };
+            console.log(`Successfully fetched owner ${ownerId}:`, ownerDetailsMap[ownerId]);
+          }
+        } catch (error) {
+          console.error(`Error fetching owner ${ownerId}:`, error.response?.status, error.response?.data || error.message);
+          // Even if fetch fails, add a placeholder to avoid undefined errors
+          ownerDetailsMap[ownerId] = {
+            name: 'Owner',
+            email: '',
+            phone: ''
+          };
+        }
+      }
+    }
+
+    // Transform the data to include property and room details
+    const favoritesWithDetails = favorites.map(favorite => ({
+      _id: favorite._id,
+      userId: favorite.userId,
+      propertyId: favorite.propertyId,
+      roomId: favorite.roomId,
+      addedAt: favorite.addedAt,
+      notes: favorite.notes,
+      tags: favorite.tags,
+      // Property details
+      property: favorite.propertyId ? {
+        _id: favorite.propertyId._id,
+        propertyName: favorite.propertyId.propertyName || favorite.propertyId.property_name,
+        address: favorite.propertyId.address,
+        latitude: favorite.propertyId.latitude,
+        longitude: favorite.propertyId.longitude,
+        images: favorite.propertyId.images || [],
+        amenities: favorite.propertyId.amenities,
+        propertyType: favorite.propertyId.propertyType,
+        ownerName: ownerDetailsMap[favorite.propertyId.owner_id]?.name || favorite.propertyId.ownerName,
+        ownerEmail: ownerDetailsMap[favorite.propertyId.owner_id]?.email,
+        ownerPhone: ownerDetailsMap[favorite.propertyId.owner_id]?.phone,
+        description: favorite.propertyId.description
+      } : null,
+      // Room details (if favoriting specific room)
+      room: favorite.roomId ? {
+        _id: favorite.roomId._id,
+        roomNumber: favorite.roomId.roomNumber || favorite.roomId.room_number,
+        rent: favorite.roomId.rent,
+        amenities: favorite.roomId.amenities,
+        images: favorite.roomId.room_image ? [favorite.roomId.room_image] : [],
+        roomImage: favorite.roomId.room_image,
+        toiletImage: favorite.roomId.toilet_image,
+        isAvailable: favorite.roomId.isAvailable || favorite.roomId.is_available,
+        roomType: favorite.roomId.roomType || favorite.roomId.room_type,
+        bedType: favorite.roomId.bed_type,
+        occupancy: favorite.roomId.occupancy,
+        roomSize: favorite.roomId.room_size,
+        description: favorite.roomId.description
+      } : null
+    }));
+
+    return res.json({
+      success: true,
+      favorites: favoritesWithDetails,
+      count: favoritesWithDetails.length,
+      message: `Found ${favoritesWithDetails.length} favorites for user`
+    });
+
+  } catch (error) {
+    console.error('Get user favorites error:', error);
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
+// Check if property/room is favorited (Public)
+const checkFavoriteStatus = async (req, res) => {
+  try {
+    const { userId, propertyId, roomId } = req.query;
+    
+    if (!userId || !propertyId) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'userId and propertyId are required' 
+      });
+    }
+
+    const favorite = await Favorite.findOne({
+      userId: String(userId),
+      propertyId: propertyId,
+      roomId: roomId || null
+    });
+
+    return res.json({
+      success: true,
+      isFavorited: !!favorite,
+      favorite: favorite
+    });
+
+  } catch (error) {
+    console.error('Check favorite status error:', error);
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
 // Get single booking (Protected) - owner or seeker can view their own booking
 const getBookingDetails = async (req, res) => {
   try {
@@ -1574,11 +1984,33 @@ const updateBookingStatus = async (req, res) => {
       return res.status(403).json({ success: false, message: 'Forbidden' });
     }
 
-    const newStatus = action === 'approve' ? 'confirmed' : 'cancelled';
+    // Only allow approval/rejection for bookings that are pending approval
+    if (booking.status !== 'pending_approval') {
+      return res.status(400).json({ 
+        success: false, 
+        message: `Cannot ${action} booking with status: ${booking.status}` 
+      });
+    }
+
+    const newStatus = action === 'approve' ? 'confirmed' : 'rejected';
     booking.status = newStatus;
+    
+    // Add approval timestamp and owner info
+    booking.approvedAt = new Date();
+    booking.approvedBy = ownerId;
+    
     await booking.save();
 
-    return res.json({ success: true, message: 'Booking status updated', booking });
+    const message = action === 'approve' 
+      ? 'Booking approved successfully' 
+      : 'Booking rejected';
+
+    return res.json({ 
+      success: true, 
+      message, 
+      booking,
+      status: newStatus
+    });
   } catch (error) {
     console.error('Update booking status error:', error);
     return res.status(500).json({ success: false, message: 'Internal server error' });
@@ -1746,10 +2178,17 @@ module.exports = {
   getAllRoomsDebug,
   createBookingPublic,
   listOwnerBookings,
+  getPendingApprovalBookings,
+  checkUserBookingStatus,
+  getUserBookings,
   getBookingDetails,
   getAllBookingsDebug,
   lookupBookingDetails,
   updateBookingStatus,
   createPaymentOrder,
-  verifyPaymentAndCreateBooking
+  verifyPaymentAndCreateBooking,
+  addToFavorites,
+  removeFromFavorites,
+  getUserFavorites,
+  checkFavoriteStatus
 };

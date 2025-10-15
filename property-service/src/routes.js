@@ -4,7 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const { createClient } = require('@supabase/supabase-js');
 const jwt = require('jsonwebtoken');
-const { addProperty, getProperties, getProperty, getPropertyAdmin, getApprovedPropertiesPublic, getApprovedPropertyPublic, updateRoomStatus, updateRoom, updateProperty, getAllPropertiesAdmin, approveRoomAdmin, approvePropertyAdmin, getRoomPublic, getAllRoomsDebug, createBookingPublic, listOwnerBookings, getBookingDetails, getAllBookingsDebug, lookupBookingDetails, updateBookingStatus, createPaymentOrder, verifyPaymentAndCreateBooking } = require('./controller');
+const { addProperty, getProperties, getProperty, getPropertyAdmin, getApprovedPropertiesPublic, getApprovedPropertyPublic, updateRoomStatus, updateRoom, updateProperty, getAllPropertiesAdmin, approveRoomAdmin, approvePropertyAdmin, getRoomPublic, getAllRoomsDebug, createBookingPublic, listOwnerBookings, getPendingApprovalBookings, checkUserBookingStatus, getUserBookings, getBookingDetails, getAllBookingsDebug, lookupBookingDetails, updateBookingStatus, createPaymentOrder, verifyPaymentAndCreateBooking, addToFavorites, removeFromFavorites, getUserFavorites, checkFavoriteStatus } = require('./controller');
 const axios = require('axios');
 
 const router = express.Router();
@@ -244,10 +244,19 @@ router.post('/payments/verify', verifyPaymentAndCreateBooking);
 // Booking routes
 router.post('/bookings', createBookingPublic);
 router.get('/owner/bookings', authenticateUser, listOwnerBookings);
+router.get('/owner/bookings/pending-approval', authenticateUser, getPendingApprovalBookings);
+router.get('/bookings/check-status', checkUserBookingStatus);
+router.get('/bookings/user', getUserBookings);
 router.get('/bookings/:bookingId', authenticateUser, getBookingDetails);
 router.get('/public/bookings/:bookingId', getBookingDetails);
 router.get('/debug/bookings', getAllBookingsDebug);
 router.get('/bookings/lookup', lookupBookingDetails);
 router.post('/bookings/:bookingId/status', authenticateUser, updateBookingStatus);
+
+// Favorites routes
+router.post('/favorites/add', addToFavorites);
+router.post('/favorites/remove', removeFromFavorites);
+router.get('/favorites/user', getUserFavorites);
+router.get('/favorites/check-status', checkFavoriteStatus);
 
 module.exports = router;

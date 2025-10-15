@@ -148,5 +148,14 @@ app.use('*', (req, res) => {
   });
 });
 
-const PORT = process.env.PORT || 3002;
-app.listen(PORT, () => console.log(`Add Property Service listening on port ${PORT}`));
+const PORT = process.env.PORT || 3003;
+const server = app.listen(PORT, () => console.log(`Add Property Service listening on port ${PORT}`));
+
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`Port ${PORT} is already in use. Please kill the process using this port and try again.`);
+  } else {
+    console.error('Server error:', err);
+  }
+  process.exit(1);
+});

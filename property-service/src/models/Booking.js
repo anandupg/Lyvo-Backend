@@ -5,8 +5,12 @@ const bookingSchema = new mongoose.Schema({
   ownerId: { type: String, required: true, index: true },
   propertyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Property', required: true, index: true },
   roomId: { type: mongoose.Schema.Types.ObjectId, ref: 'Room', required: true, index: true },
-  status: { type: String, enum: ['pending', 'confirmed', 'cancelled', 'payment_pending', 'payment_completed'], default: 'payment_pending', index: true },
+  status: { type: String, enum: ['pending', 'confirmed', 'cancelled', 'payment_pending', 'payment_completed', 'pending_approval', 'rejected'], default: 'payment_pending', index: true },
   bookedAt: { type: Date, default: Date.now },
+  
+  // Approval Information
+  approvedAt: { type: Date, default: null },
+  approvedBy: { type: String, default: null },
 
   // Payment Information
   payment: {
