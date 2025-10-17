@@ -3,7 +3,106 @@
 const { JsonWebTokenError } = require('jsonwebtoken');
 const UserModel = require('./model');
 const User = UserModel; // retain existing references
-const { BehaviourAnswers, KycDocument } = require('./model');
+const { BehaviourAnswers, KycDocument, AadharDetails } = require('./model');
+
+// Utility function to check if user's Aadhar is approved
+const checkAadharApproval = async (userId) => {
+    try {
+        const aadharDetails = await AadharDetails.findOne({ userId });
+        
+        if (!aadharDetails) {
+            return {
+                isApproved: false,
+                status: 'not_submitted',
+                message: 'No Aadhar verification found',
+                details: null
+            };
+        }
+        
+        if (aadharDetails.approvalStatus === 'approved') {
+            return {
+                isApproved: true,
+                status: 'approved',
+                message: 'Aadhar verification approved',
+                details: {
+                    aadharNumber: aadharDetails.extractedData.aadharNumber,
+                    name: aadharDetails.extractedData.name,
+                    approvalDate: aadharDetails.approvalDate,
+                    overallConfidence: aadharDetails.verificationSummary.overallConfidence,
+                    verificationMethod: aadharDetails.verificationSummary.verificationMethod
+                }
+            };
+        } else if (aadharDetails.approvalStatus === 'rejected') {
+            return {
+                isApproved: false,
+                status: 'rejected',
+                message: 'Aadhar verification rejected',
+                details: {
+                    rejectionReason: aadharDetails.verificationSummary.verificationNotes,
+                    riskScore: aadharDetails.verificationSummary.riskScore,
+                    flags: aadharDetails.verificationSummary.flags
+                }
+            };
+        } else {
+            return {
+                isApproved: false,
+                status: 'pending',
+                message: 'Aadhar verification pending',
+                details: {
+                    submittedAt: aadharDetails.auditTrail.uploadedAt,
+                    processedAt: aadharDetails.auditTrail.processedAt
+                }
+            };
+        }
+    } catch (error) {
+        console.error('Error checking Aadhar approval:', error);
+        return {
+            isApproved: false,
+            status: 'error',
+            message: 'Error checking Aadhar verification status',
+            details: null
+        };
+    }
+};
+
+// Middleware to check Aadhar approval before allowing bookings
+const requireAadharApproval = async (req, res, next) => {
+    try {
+        const userId = req.user?.id;
+        if (!userId) {
+            return res.status(401).json({ 
+                message: 'Authentication required',
+                error: 'UNAUTHORIZED'
+            });
+        }
+
+        const aadharStatus = await checkAadharApproval(userId);
+        
+        if (!aadharStatus.isApproved) {
+            return res.status(403).json({
+                message: 'Aadhar verification required for booking',
+                error: 'AADHAR_NOT_APPROVED',
+                aadharStatus: {
+                    status: aadharStatus.status,
+                    message: aadharStatus.message,
+                    details: aadharStatus.details
+                },
+                action: 'Please complete Aadhar verification to proceed with booking'
+            });
+        }
+
+        // Add Aadhar details to request for use in booking logic
+        req.aadharDetails = aadharStatus.details;
+        next();
+    } catch (error) {
+        console.error('Error in Aadhar approval middleware:', error);
+        return res.status(500).json({
+            message: 'Error checking Aadhar verification',
+            error: 'AADHAR_CHECK_ERROR'
+        });
+    }
+};
+
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const sgMail = require('@sendgrid/mail');
@@ -642,6 +741,9 @@ const verifyEmail = async (req, res) => {
             email: user.email,
             role: user.role,
             isVerified: user.isVerified,
+            // Include onboarding status fields
+            isNewUser: user.isNewUser,
+            hasCompletedBehaviorQuestions: user.hasCompletedBehaviorQuestions,
             createdAt: user.createdAt,
             updatedAt: user.updatedAt
         };
@@ -712,6 +814,9 @@ const loginUser = async (req, res) => {
             smoking: user.smoking,
             pets: user.pets,
             amenities: user.amenities,
+            // Include onboarding status fields
+            isNewUser: user.isNewUser,
+            hasCompletedBehaviorQuestions: user.hasCompletedBehaviorQuestions,
             createdAt: user.createdAt,
             updatedAt: user.updatedAt
         };
@@ -923,6 +1028,11 @@ const getUserProfile = async (req, res) => {
     try {
         const { userId } = req.params;
         
+        // Validate userId
+        if (!userId || userId === 'undefined' || userId === 'null') {
+            return res.status(400).json({ message: 'Valid user ID is required' });
+        }
+        
         // Find user by ID
         const user = await User.findById(userId).select('-password');
         
@@ -1050,6 +1160,9 @@ const googleSignIn = async (req, res) => {
             smoking: user.smoking,
             pets: user.pets,
             amenities: user.amenities,
+            // Include onboarding status fields
+            isNewUser: user.isNewUser,
+            hasCompletedBehaviorQuestions: user.hasCompletedBehaviorQuestions,
             createdAt: user.createdAt,
             updatedAt: user.updatedAt
         };
@@ -1209,6 +1322,35 @@ module.exports = {
     googleSignIn,
     uploadProfilePicture,
     upload, // Export multer upload middleware
+    // Aadhar verification functions
+    checkAadharApproval,
+    requireAadharApproval,
+    getAadharStatus: async (req, res) => {
+        try {
+            const userId = req.user?.id;
+            if (!userId) {
+                return res.status(401).json({ message: 'Authentication required' });
+            }
+
+            const aadharStatus = await checkAadharApproval(userId);
+            
+            return res.json({
+                success: true,
+                aadharStatus: {
+                    isApproved: aadharStatus.isApproved,
+                    status: aadharStatus.status,
+                    message: aadharStatus.message,
+                    details: aadharStatus.details
+                }
+            });
+        } catch (error) {
+            console.error('Error getting Aadhar status:', error);
+            return res.status(500).json({ 
+                message: 'Error checking Aadhar status',
+                error: error.message 
+            });
+        }
+    },
     // KYC: owner uploads govt ID front/back images
     uploadKycDocuments: async (req, res) => {
         try {
@@ -1218,80 +1360,296 @@ module.exports = {
             const user = await User.findById(userId);
             if (!user) return res.status(404).json({ message: 'User not found' });
 
-            // Accept a single image. Prefer a generic field name 'image'; maintain compatibility with 'front'/'back'
-            const files = req.files || [];
-            let file = null;
-            let side = null; // 'front' or 'back' or null when generic
-            if (Array.isArray(files)) {
-                file = files[0] || null;
-            }
-            if (!file && files.front && files.front[0]) {
-                file = files.front[0];
-                side = 'front';
-            }
-            if (!file && files.back && files.back[0]) {
-                file = files.back[0];
-                side = 'back';
-            }
-            if (!file) {
-                return res.status(400).json({ message: 'Please upload one image' });
+            // Get files from request
+            const files = req.files || {};
+            const frontImage = files.frontImage?.[0];
+            const backImage = files.backImage?.[0];
+            const { idType } = req.body || {};
+
+            if (!frontImage) {
+                return res.status(400).json({ message: 'Front image is required' });
             }
 
-            // Optional metadata
-            const { idType, idNumber } = req.body || {};
-
-            const uploadBufferToCloudinary = async (file) => {
-                const b64 = Buffer.from(file.buffer).toString('base64');
-                const dataURI = `data:${file.mimetype};base64,${b64}`;
-                const result = await cloudinary.uploader.upload(dataURI, {
-                    folder: 'lyvo-kyc-docs',
-                    transformation: [
-                        { width: 1600, height: 1600, crop: 'limit' },
-                        { quality: 'auto', fetch_format: 'auto' }
-                    ]
+            // First, process OCR to determine if verification will pass
+            let ocrResult = null;
+            try {
+                const axios = require('axios');
+                const imageData = frontImage.buffer.toString('base64');
+                
+                const ocrResponse = await axios.post('http://localhost:5003/ocr/aadhar/base64', {
+                    image: imageData
+                }, {
+                    timeout: 30000, // 30 second timeout
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
                 });
-                return result.secure_url;
+
+                if (ocrResponse.data.success) {
+                    ocrResult = ocrResponse.data;
+                    console.log('OCR Result:', ocrResult);
+                }
+            } catch (ocrError) {
+                console.error('OCR service error:', ocrError.message);
+                // Continue without OCR if service is unavailable
+            }
+
+            // Determine KYC status based on OCR results and name matching
+            let kycStatus = 'pending';
+            let kycVerified = false;
+            let confidenceScore = 0;
+            let verificationFailureReason = '';
+
+            if (ocrResult && ocrResult.success) {
+                confidenceScore = ocrResult.confidence || 0;
+                
+                // Check if it's a valid Aadhar card
+                const isValidAadhar = ocrResult.validation && ocrResult.validation.is_aadhar_card;
+                
+                // Check name matching
+                let nameMatches = false;
+                let extractedName = '';
+                let userName = '';
+                
+                if (ocrResult.extracted_data && ocrResult.extracted_data.name) {
+                    extractedName = ocrResult.extracted_data.name;
+                    userName = user.name || '';
+                    
+                    // Simple case-insensitive name matching
+                    const normalizedExtracted = extractedName.toUpperCase().trim();
+                    const normalizedUser = userName.toUpperCase().trim();
+                    nameMatches = normalizedExtracted === normalizedUser;
+                }
+                
+                // Only auto-approve if BOTH conditions are met
+                if (confidenceScore >= 70 && isValidAadhar && nameMatches) {
+                    kycStatus = 'approved';
+                    kycVerified = true;
+                    console.log(`Auto-approved KYC for user ${userId} - Valid Aadhar + Name Match. Confidence: ${confidenceScore}%`);
+                } else {
+                    // Determine failure reason
+                    if (!isValidAadhar) {
+                        verificationFailureReason = 'Invalid Aadhar card detected';
+                    } else if (!nameMatches) {
+                        verificationFailureReason = `Name mismatch: Document shows "${extractedName}" but profile shows "${userName}"`;
+                    } else if (confidenceScore < 70) {
+                        verificationFailureReason = `Low confidence score: ${confidenceScore}%`;
+                    }
+                    
+                    kycStatus = 'rejected';
+                    kycVerified = false;
+                    console.log(`KYC verification failed for user ${userId}. Reason: ${verificationFailureReason}`);
+                }
+            } else {
+                verificationFailureReason = 'OCR processing failed';
+                kycStatus = 'rejected';
+                kycVerified = false;
+            }
+
+            // Only upload to Cloudinary if verification passes
+            let frontUrl = null;
+            let backUrl = null;
+
+            if (kycVerified) {
+                console.log('Verification passed - uploading to Cloudinary...');
+                
+                const uploadBufferToCloudinary = async (file) => {
+                    const b64 = Buffer.from(file.buffer).toString('base64');
+                    const dataURI = `data:${file.mimetype};base64,${b64}`;
+                    const result = await cloudinary.uploader.upload(dataURI, {
+                        folder: 'lyvo-kyc-docs',
+                        transformation: [
+                            { width: 1600, height: 1600, crop: 'limit' },
+                            { quality: 'auto', fetch_format: 'auto' }
+                        ]
+                    });
+                    return result.secure_url;
+                };
+
+                // Upload front image
+                frontUrl = await uploadBufferToCloudinary(frontImage);
+                if (backImage) {
+                    backUrl = await uploadBufferToCloudinary(backImage);
+                }
+                
+                console.log('Image uploaded to Cloudinary successfully');
+            } else {
+                console.log('Verification failed - skipping Cloudinary upload');
+            }
+
+
+            // Update user with KYC information (only if verification passed)
+            const updates = {
+                govtIdType: idType || 'aadhar',
+                kycStatus: kycStatus,
+                kycVerified: kycVerified,
+                kycReviewedAt: kycVerified ? new Date() : null,
+                kycReviewedBy: null  // System approval - no specific reviewer
             };
 
-            const updates = {};
-            const uploadedUrl = await uploadBufferToCloudinary(file);
-            // If caller did not specify side, choose automatically: fill front first then back
-            if (!side) {
-                if (!user.govtIdFrontUrl) side = 'front'; else side = 'back';
+            // Only add image URLs if verification passed
+            if (kycVerified) {
+                updates.govtIdFrontUrl = frontUrl;
+                updates.govtIdBackUrl = backUrl;
             }
-            if (side === 'front') updates.govtIdFrontUrl = uploadedUrl; else updates.govtIdBackUrl = uploadedUrl;
-            if (idType) updates.govtIdType = String(idType);
-            if (idNumber) updates.govtIdNumber = String(idNumber);
 
-            // When user uploads, set status to pending and reset verification
-            updates.kycStatus = 'pending';
-            updates.kycVerified = false;
-            updates.kycReviewedAt = null;
-            updates.kycReviewedBy = null;
+            // Update KYC Document record
+            const kycDocUpdate = {
+                        idType: idType || 'aadhar',
+                        status: kycStatus,
+                        reviewedAt: kycVerified ? new Date() : null,
+                reviewedBy: null,  // System approval - no specific reviewer
+                        ocrData: ocrResult ? {
+                            extractedData: ocrResult.extracted_data,
+                    validation: ocrResult.validation,
+                            confidenceScore: confidenceScore,
+                    rawText: ocrResult.raw_text,
+                    ocrDetails: ocrResult.ocr_details
+                        } : null,
+                        confidenceScore: confidenceScore,
+                        ocrProcessedAt: new Date()
+            };
 
-            // Upsert KYC Document record in its own collection
+            // Only add image URLs if verification passed
+            if (kycVerified) {
+                kycDocUpdate.frontUrl = frontUrl;
+                kycDocUpdate.backUrl = backUrl;
+            }
+
             await KycDocument.findOneAndUpdate(
                 { userId },
-                {
-                    $set: {
-                        idType: updates.govtIdType || user.govtIdType || null,
-                        idNumber: updates.govtIdNumber || user.govtIdNumber || null,
-                        frontUrl: (side === 'front' ? uploadedUrl : user.govtIdFrontUrl) || null,
-                        backUrl: (side === 'back' ? uploadedUrl : user.govtIdBackUrl) || null,
-                        status: 'pending',
-                        reviewedAt: null,
-                        reviewedBy: null
-                    }
-                },
+                { $set: kycDocUpdate },
                 { upsert: true, new: true }
             );
 
+            // Save comprehensive Aadhar details if verification passes
+            if (kycVerified && ocrResult && ocrResult.success) {
+                console.log('Saving comprehensive Aadhar details...');
+                
+                // Prepare name matching results
+                const nameMatchResult = {
+                    extractedName: ocrResult.extracted_data?.name || '',
+                    profileName: user.name || '',
+                    nameMatch: true, // We know it matches since verification passed
+                    matchConfidence: confidenceScore,
+                    matchReason: 'Exact match - verification passed'
+                };
+
+                // Prepare Aadhar details document
+                const aadharDetailsData = {
+                    userId: userId,
+                    
+                    // Document Images
+                    frontImageUrl: frontUrl,
+                    backImageUrl: backUrl,
+                    
+                    // Approval Status
+                    approvalStatus: 'approved',
+                    approvalDate: new Date(),
+                    approvedBy: null, // System approval
+                    
+                    // OCR Extracted Data
+                    extractedData: {
+                        aadharNumber: ocrResult.extracted_data?.aadhar_number || '',
+                        name: ocrResult.extracted_data?.name || '',
+                        dateOfBirth: ocrResult.extracted_data?.date_of_birth || '',
+                        gender: ocrResult.extracted_data?.gender || '',
+                        mobile: ocrResult.extracted_data?.mobile || null,
+                        address: ocrResult.extracted_data?.address || null,
+                        fatherName: ocrResult.extracted_data?.father_name || null,
+                        motherName: ocrResult.extracted_data?.mother_name || null,
+                        vid: ocrResult.extracted_data?.vid || null
+                    },
+                    
+                    // OCR Validation Results
+                    validationResults: {
+                        isAadharCard: ocrResult.validation?.is_aadhar_card || false,
+                        hasAadharKeywords: ocrResult.validation?.has_aadhar_keywords || false,
+                        hasAadharNumber: ocrResult.validation?.has_aadhar_number || false,
+                        hasName: ocrResult.validation?.has_name || false,
+                        hasDob: ocrResult.validation?.has_dob || false,
+                        hasGender: ocrResult.validation?.has_gender || false,
+                        hasMobile: ocrResult.validation?.has_mobile || false,
+                        confidenceScore: ocrResult.validation?.confidence_score || 0,
+                        coreFieldsCount: ocrResult.validation?.core_fields_count || 0,
+                        totalCoreFields: ocrResult.validation?.total_core_fields || 5
+                    },
+                    
+                    // Name Matching Results
+                    nameMatching: nameMatchResult,
+                    
+                    // OCR Processing Details
+                    ocrProcessing: {
+                        apiUsed: ocrResult.ocr_details?.api_used || 'OCR.space API',
+                        processingTime: ocrResult.ocr_details?.processing_time || null,
+                        rawText: ocrResult.raw_text || '',
+                        ocrConfidence: ocrResult.ocr_details?.api_confidence || 0,
+                        fieldExtractionConfidence: ocrResult.ocr_details?.field_extraction_confidence || 0,
+                        validationConfidence: ocrResult.ocr_details?.validation_confidence || 0,
+                        processedAt: new Date()
+                    },
+                    
+                    // Verification Summary
+                    verificationSummary: {
+                        overallConfidence: confidenceScore,
+                        verificationMethod: 'auto',
+                        verificationNotes: 'Automatically verified - Valid Aadhar + Name match',
+                        riskScore: 0,
+                        flags: []
+                    },
+                    
+                    // Audit Trail
+                    auditTrail: {
+                        uploadedAt: new Date(),
+                        processedAt: new Date(),
+                        approvedAt: new Date(),
+                        lastModifiedAt: new Date(),
+                        modificationHistory: [{
+                            modifiedAt: new Date(),
+                            modifiedBy: null,
+                            changes: 'Initial verification and approval',
+                            reason: 'System auto-approval'
+                        }]
+                    }
+                };
+
+                // Save to AadharDetails collection
+                await AadharDetails.findOneAndUpdate(
+                    { userId },
+                    { $set: aadharDetailsData },
+                { upsert: true, new: true }
+            );
+                
+                console.log('Aadhar details saved successfully');
+            }
+
             const updated = await User.findByIdAndUpdate(userId, { $set: updates }, { new: true }).select('-password');
 
-            return res.json({ message: 'KYC documents uploaded', user: updated });
+            // Prepare response
+            const response = {
+                message: kycStatus === 'approved' ? 'KYC verification successful' : 'KYC verification failed',
+                kycStatus: kycStatus,
+                kycVerified: kycVerified,
+                verificationFailureReason: verificationFailureReason || null,
+                user: updated
+            };
+
+            // Include OCR results in response
+            if (ocrResult) {
+                response.ocrResult = {
+                    extractedData: ocrResult.extracted_data,
+                    validation: ocrResult.validation,
+                    confidence: confidenceScore,
+                    verified: ocrResult.validation?.is_aadhar_card || false,
+                    rawText: ocrResult.raw_text,
+                    ocrDetails: ocrResult.ocr_details
+                };
+            }
+
+            return res.json(response);
         } catch (e) {
             console.error('uploadKycDocuments error:', e);
-            return res.status(500).json({ message: 'Server error' });
+            return res.status(500).json({ message: 'Server error', error: e.message });
         }
     },
     // Admin verifies/rejects KYC

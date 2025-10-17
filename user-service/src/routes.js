@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { getAllUsers, registerUser, verifyEmail, loginUser, forgotPassword, resetPassword, getUserProfile, updateUserProfile, changePassword, googleSignIn, uploadProfilePicture, upload, saveBehaviourAnswers, getBehaviourQuestions, getBehaviourStatus, uploadKycDocuments, adminReviewKyc, toggleUserStatus, checkEmailExists } = require('./controller');
+const { getAllUsers, registerUser, verifyEmail, loginUser, forgotPassword, resetPassword, getUserProfile, updateUserProfile, changePassword, googleSignIn, uploadProfilePicture, upload, saveBehaviourAnswers, getBehaviourQuestions, getBehaviourStatus, uploadKycDocuments, adminReviewKyc, toggleUserStatus, checkEmailExists, getAadharStatus, requireAadharApproval } = require('./controller');
 const verifyJWT = require('./middleware');
 
 // Public routes
@@ -21,9 +21,15 @@ router.put('/user/profile/:userId', verifyJWT, updateUserProfile);
 router.get('/public/user/:userId', getUserProfile);
 router.post('/user/change-password', verifyJWT, changePassword);
 router.post('/user/upload-profile-picture', verifyJWT, upload.single('profilePicture'), uploadProfilePicture);
-// KYC endpoints (accept one image at a time under field 'image', but remain compatible with 'front'/'back')
-router.post('/user/kyc/upload', verifyJWT, upload.any(), uploadKycDocuments);
+// KYC endpoints (accept front and back images)
+router.post('/user/upload-kyc', verifyJWT, upload.fields([
+    { name: 'frontImage', maxCount: 1 },
+    { name: 'backImage', maxCount: 1 }
+]), uploadKycDocuments);
 router.post('/admin/kyc/review', verifyJWT, adminReviewKyc);
+
+// Aadhar verification endpoints
+router.get('/user/aadhar-status', verifyJWT, getAadharStatus);
 // Admin user management
 router.patch('/admin/user/:userId/toggle-status', verifyJWT, toggleUserStatus);
 // Behaviour onboarding

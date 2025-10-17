@@ -4,7 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const { createClient } = require('@supabase/supabase-js');
 const jwt = require('jsonwebtoken');
-const { addProperty, getProperties, getProperty, getPropertyAdmin, getApprovedPropertiesPublic, getApprovedPropertyPublic, updateRoomStatus, updateRoom, updateProperty, getAllPropertiesAdmin, approveRoomAdmin, approvePropertyAdmin, getRoomPublic, getAllRoomsDebug, createBookingPublic, listOwnerBookings, getPendingApprovalBookings, checkUserBookingStatus, getUserBookings, getBookingDetails, getAllBookingsDebug, lookupBookingDetails, updateBookingStatus, createPaymentOrder, verifyPaymentAndCreateBooking, addToFavorites, removeFromFavorites, getUserFavorites, checkFavoriteStatus } = require('./controller');
+const { addProperty, getProperties, getProperty, getPropertyAdmin, getApprovedPropertiesPublic, getApprovedPropertyPublic, updateRoomStatus, updateRoom, updateProperty, getAllPropertiesAdmin, approveRoomAdmin, approvePropertyAdmin, getRoomPublic, getAllRoomsDebug, createBookingPublic, listOwnerBookings, getPendingApprovalBookings, checkUserBookingStatus, getUserBookings, getBookingDetails, getAllBookingsDebug, lookupBookingDetails, updateBookingStatus, createPaymentOrder, verifyPaymentAndCreateBooking, addToFavorites, removeFromFavorites, getUserFavorites, checkFavoriteStatus, createMissingTenantRecords, getOwnerTenants, getPropertyTenants, getTenantDetails, getUserTenantRecords, updateTenantDetails, markTenantCheckIn, markTenantCheckOut, getRoomTenants } = require('./controller');
 const axios = require('axios');
 
 const router = express.Router();
@@ -258,5 +258,18 @@ router.post('/favorites/add', addToFavorites);
 router.post('/favorites/remove', removeFromFavorites);
 router.get('/favorites/user', getUserFavorites);
 router.get('/favorites/check-status', checkFavoriteStatus);
+
+// Tenant routes
+router.post('/debug/tenants/create-missing', createMissingTenantRecords); // DEBUG: Create tenant records for confirmed bookings
+router.get('/tenants/owner', authenticateUser, getOwnerTenants); // Get all tenants for owner
+router.get('/tenants/user', authenticateUser, getUserTenantRecords); // Get tenant records for seeker
+router.get('/tenants/property/:propertyId', authenticateUser, getPropertyTenants); // Get tenants for specific property
+router.get('/tenants/:tenantId', authenticateUser, getTenantDetails); // Get specific tenant details
+router.put('/tenants/:tenantId', authenticateUser, updateTenantDetails); // Update tenant details
+router.post('/tenants/:tenantId/check-in', authenticateUser, markTenantCheckIn); // Mark tenant as checked in
+router.post('/tenants/:tenantId/check-out', authenticateUser, markTenantCheckOut); // Mark tenant as checked out
+
+// Room tenant routes
+router.get('/rooms/:roomId/tenants', getRoomTenants); // Get tenants for specific room (public)
 
 module.exports = router;

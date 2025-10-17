@@ -108,6 +108,7 @@ const Property = mongoose.models.Property || mongoose.model('Property', property
 const Room = mongoose.models.Room || mongoose.model('Room', roomSchema);
 const Booking = require('./models/Booking');
 const Favorite = require('./models/Favorite');
+const Tenant = require('./models/Tenant');
 
 // Cloudinary config
 cloudinary.config({
@@ -2001,14 +2002,122 @@ const updateBookingStatus = async (req, res) => {
     
     await booking.save();
 
+    // If booking is approved, create a tenant record
+    let tenant = null;
+    if (action === 'approve') {
+      try {
+        // Check if tenant record already exists for this booking
+        const existingTenant = await Tenant.findOne({ bookingId: booking._id });
+        
+        if (!existingTenant) {
+          console.log(`Creating tenant for booking ${booking._id}`);
+          console.log('Booking data:', {
+            userId: booking.userId,
+            userSnapshot: booking.userSnapshot,
+            propertyId: booking.propertyId,
+            roomId: booking.roomId,
+            payment: booking.payment
+          });
+          
+          // Fetch property and room details
+          const property = await Property.findById(booking.propertyId);
+          const room = await Room.findById(booking.roomId);
+          
+          console.log('Property found:', !!property);
+          console.log('Room found:', !!room);
+          
+          // Fetch owner details from user service
+          let ownerDetails = {
+            name: booking.ownerName || 'Owner',
+            email: '',
+            phone: ''
+          };
+          
+          try {
+            const userServiceUrl = process.env.USER_SERVICE_URL || 'http://localhost:4002/api';
+            const ownerResponse = await axios.get(`${userServiceUrl}/public/user/${ownerId}`);
+            if (ownerResponse.data) {
+              ownerDetails = {
+                name: ownerResponse.data.name || 'Owner',
+                email: ownerResponse.data.email || '',
+                phone: ownerResponse.data.phone || ownerResponse.data.phoneNumber || ''
+              };
+            }
+          } catch (err) {
+            console.error('Error fetching owner details for tenant:', err.message);
+          }
+          
+          // Create tenant record
+          tenant = new Tenant({
+            // User/Tenant Information
+            userId: booking.userId,
+            userName: booking.userSnapshot?.name || 'User',
+            userEmail: booking.userSnapshot?.email || '',
+            userPhone: booking.userSnapshot?.phone || '',
+            
+            // Property and Room Information
+            propertyId: booking.propertyId,
+            propertyName: property?.property_name || booking.propertySnapshot?.name || 'Property',
+            roomId: booking.roomId,
+            roomNumber: room?.room_number?.toString() || booking.roomSnapshot?.roomNumber?.toString() || 'N/A',
+            
+            // Owner Information
+            ownerId: booking.ownerId,
+            ownerName: ownerDetails.name,
+            ownerEmail: ownerDetails.email,
+            ownerPhone: ownerDetails.phone,
+            
+            // Booking Reference
+            bookingId: booking._id,
+            
+            // Payment Information
+            paymentId: booking.payment?.razorpayPaymentId,
+            razorpayOrderId: booking.payment?.razorpayOrderId,
+            razorpayPaymentId: booking.payment?.razorpayPaymentId,
+            amountPaid: booking.payment?.totalAmount || 0,
+            
+            // Tenancy Dates
+            checkInDate: new Date(), // Set to current date when approved
+            checkOutDate: null, // Can be set later by owner
+            
+            // Tenancy Details
+            monthlyRent: booking.payment?.monthlyRent || room?.rent || 0,
+            securityDeposit: booking.payment?.securityDeposit || 0,
+            
+            // Status
+            status: 'active',
+            
+            // Metadata
+            confirmedBy: ownerId,
+            confirmedAt: new Date(),
+            
+            // Additional notes
+            specialRequests: '',
+          });
+          
+          await tenant.save();
+          console.log(`Tenant record created for booking ${booking._id}`);
+        } else {
+          tenant = existingTenant;
+          console.log(`Tenant record already exists for booking ${booking._id}`);
+        }
+      } catch (tenantError) {
+        console.error('Error creating tenant record:', tenantError);
+        console.error('Tenant error stack:', tenantError.stack);
+        console.error('Booking data:', JSON.stringify(booking, null, 2));
+        // Don't fail the approval if tenant creation fails
+      }
+    }
+
     const message = action === 'approve' 
-      ? 'Booking approved successfully' 
+      ? 'Booking approved successfully and tenant record created' 
       : 'Booking rejected';
 
     return res.json({ 
       success: true, 
       message, 
       booking,
+      tenant: tenant || undefined,
       status: newStatus
     });
   } catch (error) {
@@ -2159,6 +2268,410 @@ const updateProperty = async (req, res) => {
   }
 };
 
+// ==================== TENANT MANAGEMENT ====================
+
+// DEBUG: Create tenant records for all confirmed bookings that don't have one
+const createMissingTenantRecords = async (req, res) => {
+  try {
+    console.log('Creating missing tenant records...');
+    
+    // Find all confirmed bookings
+    const confirmedBookings = await Booking.find({ status: 'confirmed' });
+    console.log(`Found ${confirmedBookings.length} confirmed bookings`);
+    
+    const results = {
+      created: 0,
+      existing: 0,
+      errors: []
+    };
+    
+    for (const booking of confirmedBookings) {
+      try {
+        // Check if tenant record already exists
+        const existingTenant = await Tenant.findOne({ bookingId: booking._id });
+        
+        if (existingTenant) {
+          results.existing++;
+          console.log(`Tenant already exists for booking ${booking._id}`);
+          continue;
+        }
+        
+        // Fetch property and room details
+        const property = await Property.findById(booking.propertyId);
+        const room = await Room.findById(booking.roomId);
+        
+        // Fetch owner details from user service
+        let ownerDetails = {
+          name: booking.ownerName || 'Owner',
+          email: '',
+          phone: ''
+        };
+        
+        try {
+          const userServiceUrl = process.env.USER_SERVICE_URL || 'http://localhost:4002/api';
+          const ownerResponse = await axios.get(`${userServiceUrl}/public/user/${booking.ownerId}`);
+          if (ownerResponse.data) {
+            ownerDetails = {
+              name: ownerResponse.data.name || 'Owner',
+              email: ownerResponse.data.email || '',
+              phone: ownerResponse.data.phone || ownerResponse.data.phoneNumber || ''
+            };
+          }
+        } catch (err) {
+          console.error(`Error fetching owner details for booking ${booking._id}:`, err.message);
+        }
+        
+        // Create tenant record
+        const tenant = new Tenant({
+          userId: booking.userId,
+          userName: booking.userSnapshot?.name || 'User',
+          userEmail: booking.userSnapshot?.email || '',
+          userPhone: booking.userSnapshot?.phone || '',
+          propertyId: booking.propertyId,
+          propertyName: property?.property_name || booking.propertySnapshot?.name || 'Property',
+          roomId: booking.roomId,
+          roomNumber: room?.room_number?.toString() || booking.roomSnapshot?.roomNumber?.toString() || 'N/A',
+          ownerId: booking.ownerId,
+          ownerName: ownerDetails.name,
+          ownerEmail: ownerDetails.email,
+          ownerPhone: ownerDetails.phone,
+          bookingId: booking._id,
+          paymentId: booking.payment?.razorpayPaymentId,
+          razorpayOrderId: booking.payment?.razorpayOrderId,
+          razorpayPaymentId: booking.payment?.razorpayPaymentId,
+          amountPaid: booking.payment?.totalAmount || 0,
+          checkInDate: new Date(),
+          checkOutDate: null,
+          monthlyRent: booking.payment?.monthlyRent || room?.rent || 0,
+          securityDeposit: booking.payment?.securityDeposit || 0,
+          status: 'active',
+          confirmedBy: booking.approvedBy || booking.ownerId,
+          confirmedAt: booking.approvedAt || booking.createdAt,
+          specialRequests: '',
+        });
+        
+        await tenant.save();
+        results.created++;
+        console.log(`Created tenant record for booking ${booking._id}`);
+      } catch (err) {
+        console.error(`Error creating tenant for booking ${booking._id}:`, err);
+        results.errors.push({
+          bookingId: booking._id,
+          error: err.message
+        });
+      }
+    }
+    
+    return res.json({
+      success: true,
+      message: 'Tenant record creation completed',
+      results
+    });
+  } catch (error) {
+    console.error('Create missing tenant records error:', error);
+    return res.status(500).json({ success: false, message: 'Internal server error', error: error.message });
+  }
+};
+
+// Get all tenants for an owner
+const getOwnerTenants = async (req, res) => {
+  try {
+    const ownerId = req.user?.id;
+    if (!ownerId) {
+      return res.status(401).json({ success: false, message: 'Unauthorized' });
+    }
+
+    const { status } = req.query; // optional filter by status
+    const query = { ownerId };
+    if (status && ['active', 'completed', 'terminated', 'extended'].includes(status)) {
+      query.status = status;
+    }
+
+    const tenants = await Tenant.find(query).sort({ createdAt: -1 });
+
+    return res.json({
+      success: true,
+      tenants,
+      count: tenants.length
+    });
+  } catch (error) {
+    console.error('Get owner tenants error:', error);
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
+// Get all tenants for a specific property
+const getPropertyTenants = async (req, res) => {
+  try {
+    const { propertyId } = req.params;
+    const ownerId = req.user?.id;
+    
+    if (!ownerId) {
+      return res.status(401).json({ success: false, message: 'Unauthorized' });
+    }
+
+    const tenants = await Tenant.find({ propertyId, ownerId }).sort({ createdAt: -1 });
+
+    return res.json({
+      success: true,
+      tenants,
+      count: tenants.length
+    });
+  } catch (error) {
+    console.error('Get property tenants error:', error);
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
+// Get tenant details by ID
+const getTenantDetails = async (req, res) => {
+  try {
+    const { tenantId } = req.params;
+    const userId = req.user?.id;
+    
+    if (!userId) {
+      return res.status(401).json({ success: false, message: 'Unauthorized' });
+    }
+
+    const tenant = await Tenant.findById(tenantId);
+    
+    if (!tenant) {
+      return res.status(404).json({ success: false, message: 'Tenant not found' });
+    }
+
+    // Check if user is owner or the tenant themselves
+    if (String(tenant.ownerId) !== String(userId) && String(tenant.userId) !== String(userId)) {
+      return res.status(403).json({ success: false, message: 'Forbidden' });
+    }
+
+    return res.json({
+      success: true,
+      tenant
+    });
+  } catch (error) {
+    console.error('Get tenant details error:', error);
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
+// Get user's tenant records (for seekers)
+const getUserTenantRecords = async (req, res) => {
+  try {
+    const userId = req.user?.id;
+    
+    if (!userId) {
+      return res.status(401).json({ success: false, message: 'Unauthorized' });
+    }
+
+    const tenants = await Tenant.find({ userId }).sort({ createdAt: -1 });
+
+    return res.json({
+      success: true,
+      tenants,
+      count: tenants.length
+    });
+  } catch (error) {
+    console.error('Get user tenant records error:', error);
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
+// Update tenant status or details
+const updateTenantDetails = async (req, res) => {
+  try {
+    const { tenantId } = req.params;
+    const ownerId = req.user?.id;
+    const updates = req.body;
+    
+    if (!ownerId) {
+      return res.status(401).json({ success: false, message: 'Unauthorized' });
+    }
+
+    const tenant = await Tenant.findById(tenantId);
+    
+    if (!tenant) {
+      return res.status(404).json({ success: false, message: 'Tenant not found' });
+    }
+
+    // Only owner can update tenant details
+    if (String(tenant.ownerId) !== String(ownerId)) {
+      return res.status(403).json({ success: false, message: 'Forbidden' });
+    }
+
+    // Update allowed fields
+    const allowedUpdates = [
+      'status',
+      'checkOutDate',
+      'actualCheckInDate',
+      'actualCheckOutDate',
+      'agreementUrl',
+      'agreementStartDate',
+      'agreementEndDate',
+      'notes',
+      'monthlyRent',
+      'securityDeposit'
+    ];
+
+    allowedUpdates.forEach(field => {
+      if (updates[field] !== undefined) {
+        tenant[field] = updates[field];
+      }
+    });
+
+    await tenant.save();
+
+    return res.json({
+      success: true,
+      message: 'Tenant details updated successfully',
+      tenant
+    });
+  } catch (error) {
+    console.error('Update tenant details error:', error);
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
+// Mark tenant as checked in
+const markTenantCheckIn = async (req, res) => {
+  try {
+    const { tenantId } = req.params;
+    const ownerId = req.user?.id;
+    
+    if (!ownerId) {
+      return res.status(401).json({ success: false, message: 'Unauthorized' });
+    }
+
+    const tenant = await Tenant.findById(tenantId);
+    
+    if (!tenant) {
+      return res.status(404).json({ success: false, message: 'Tenant not found' });
+    }
+
+    if (String(tenant.ownerId) !== String(ownerId)) {
+      return res.status(403).json({ success: false, message: 'Forbidden' });
+    }
+
+    tenant.actualCheckInDate = new Date();
+    tenant.status = 'active';
+    await tenant.save();
+
+    return res.json({
+      success: true,
+      message: 'Tenant checked in successfully',
+      tenant
+    });
+  } catch (error) {
+    console.error('Mark tenant check-in error:', error);
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
+// Mark tenant as checked out
+const markTenantCheckOut = async (req, res) => {
+  try {
+    const { tenantId } = req.params;
+    const ownerId = req.user?.id;
+    
+    if (!ownerId) {
+      return res.status(401).json({ success: false, message: 'Unauthorized' });
+    }
+
+    const tenant = await Tenant.findById(tenantId);
+    
+    if (!tenant) {
+      return res.status(404).json({ success: false, message: 'Tenant not found' });
+    }
+
+    if (String(tenant.ownerId) !== String(ownerId)) {
+      return res.status(403).json({ success: false, message: 'Forbidden' });
+    }
+
+    tenant.actualCheckOutDate = new Date();
+    tenant.status = 'completed';
+    await tenant.save();
+
+    return res.json({
+      success: true,
+      message: 'Tenant checked out successfully',
+      tenant
+    });
+  } catch (error) {
+    console.error('Mark tenant check-out error:', error);
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
+// Get tenants for a specific room (public endpoint)
+const getRoomTenants = async (req, res) => {
+  try {
+    const { roomId } = req.params;
+    
+    if (!roomId) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Room ID is required' 
+      });
+    }
+
+    // Validate room ID format
+    if (!mongoose.Types.ObjectId.isValid(roomId)) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Invalid room ID format' 
+      });
+    }
+
+    // Find the room first to get property details
+    const Room = mongoose.model('Room', roomSchema);
+    const room = await Room.findById(roomId).populate('property_id');
+    
+    if (!room) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Room not found' 
+      });
+    }
+
+    // Get tenant records for this room
+    const Tenant = mongoose.model('Tenant', tenantSchema);
+    const tenants = await Tenant.find({ 
+      roomId: roomId,
+      status: { $in: ['confirmed', 'checked_in', 'active'] }
+    }).select('name age occupation bio moveInDate status -_id');
+
+    // Format tenant data for public display (privacy protection)
+    const formattedTenants = tenants.map(tenant => ({
+      _id: tenant._id,
+      name: tenant.name || 'Anonymous Tenant',
+      age: tenant.age || null,
+      occupation: tenant.occupation || null,
+      bio: tenant.bio || null,
+      moveInDate: tenant.moveInDate || null,
+      status: tenant.status
+    }));
+
+    console.log(`Found ${formattedTenants.length} tenants for room ${roomId}`);
+
+    return res.json({
+      success: true,
+      tenants: formattedTenants,
+      roomInfo: {
+        roomNumber: room.room_number,
+        roomType: room.room_type,
+        occupancy: room.occupancy,
+        propertyName: room.property_id?.property_name || 'Unknown Property'
+      }
+    });
+
+  } catch (error) {
+    console.error('Get room tenants error:', error);
+    return res.status(500).json({ 
+      success: false, 
+      message: 'Internal server error' 
+    });
+  }
+};
+
 module.exports = {
   addProperty,
   getProperties,
@@ -2190,5 +2703,15 @@ module.exports = {
   addToFavorites,
   removeFromFavorites,
   getUserFavorites,
-  checkFavoriteStatus
+  checkFavoriteStatus,
+  // Tenant management
+  createMissingTenantRecords,
+  getOwnerTenants,
+  getPropertyTenants,
+  getTenantDetails,
+  getUserTenantRecords,
+  updateTenantDetails,
+  markTenantCheckIn,
+  markTenantCheckOut,
+  getRoomTenants
 };
