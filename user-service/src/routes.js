@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { getAllUsers, registerUser, verifyEmail, loginUser, forgotPassword, resetPassword, getUserProfile, updateUserProfile, changePassword, googleSignIn, uploadProfilePicture, upload, saveBehaviourAnswers, getBehaviourQuestions, getBehaviourStatus, uploadKycDocuments, adminReviewKyc, toggleUserStatus, checkEmailExists, getAadharStatus, requireAadharApproval } = require('./controller');
+const { getAllUsers, registerUser, verifyEmail, loginUser, forgotPassword, resetPassword, getUserProfile, updateUserProfile, changePassword, googleSignIn, uploadProfilePicture, upload, saveBehaviourAnswers, getBehaviourQuestions, getBehaviourStatus, uploadKycDocuments, adminReviewKyc, toggleUserStatus, checkEmailExists, resendVerificationEmail, getAadharStatus, requireAadharApproval } = require('./controller');
 const verifyJWT = require('./middleware');
 
 // Public routes
@@ -11,6 +11,7 @@ router.post('/user/forgot-password', forgotPassword);
 router.post('/user/reset-password', resetPassword);
 router.get('/user/verify-email/:token', verifyEmail);
 router.get('/user/check-email', checkEmailExists);
+router.post('/user/resend-verification', resendVerificationEmail);
 
 // Protected routes
 router.get('/user/users', verifyJWT, getAllUsers);

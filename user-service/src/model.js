@@ -43,68 +43,6 @@ const userSchema = new mongoose.Schema({
         default: null,
         trim: true
     },
-    occupation: {
-        type: String,
-        default: null,
-        trim: true
-    },
-    company: {
-        type: String,
-        default: null,
-        trim: true
-    },
-    workSchedule: {
-        type: String,
-        default: null,
-        trim: true
-    },
-    preferredLocation: {
-        type: String,
-        default: null,
-        trim: true
-    },
-    budget: {
-        type: String,
-        default: null,
-        trim: true
-    },
-    roomType: {
-        type: String,
-        default: null,
-        trim: true
-    },
-    genderPreference: {
-        type: String,
-        default: null,
-        trim: true
-    },
-    lifestyle: {
-        type: String,
-        default: null,
-        trim: true
-    },
-    cleanliness: {
-        type: String,
-        default: null,
-        trim: true
-    },
-    noiseLevel: {
-        type: String,
-        default: null,
-        trim: true
-    },
-    smoking: {
-        type: Boolean,
-        default: false
-    },
-    pets: {
-        type: Boolean,
-        default: false
-    },
-    amenities: [{
-        type: String,
-        trim: true
-    }],
     role: {
         type: Number,
         default: 1,

@@ -141,7 +141,7 @@ if (process.env.SENDGRID_API_KEY) {
 }
 
 // Initialize Google OAuth client
-const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID || '864948749872-dh9vc6atlj2psgd53oiqg99kqgdbusfe.apps.googleusercontent.com');
 
 // Get all users (admin only)
 const getAllUsers = async (req, res) => {
@@ -193,6 +193,13 @@ const registerUser = async (req, res) => {
         if (existingUser) {
             // If user exists but is not verified, allow them to request verification again
             if (!existingUser.isVerified) {
+                console.log(`User ${email} exists but is not verified. Updating with new signup data and generating new verification token.`);
+                
+                // Update user data with new signup information
+                existingUser.name = name;
+                existingUser.password = await bcrypt.hash(password, 10);
+                existingUser.role = role !== undefined ? role : existingUser.role;
+                
                 // Generate new verification token
                 const verificationToken = crypto.randomBytes(32).toString('hex');
                 const verificationTokenExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
@@ -209,8 +216,8 @@ const registerUser = async (req, res) => {
                 const msg = {
                     to: email,
                     from: process.env.SENDGRID_FROM_EMAIL || 'noreply@lyvo.com',
-                    subject: 'Verify Your Email - Lyvo',
-                    text: `Hello ${existingUser.name}, we noticed your email hasn't been verified yet. Please verify your email address by clicking this link: ${verificationLink}`,
+                    subject: 'Verify Your Email - Lyvo+ (New Verification Link)',
+                    text: `Hello ${existingUser.name}, you've requested to verify your email again. Please use this NEW verification link to complete your account setup: ${verificationLink}`,
                     html: `
                         <!DOCTYPE html>
                         <html lang="en">
@@ -230,18 +237,18 @@ const registerUser = async (req, res) => {
                                                     <div style="width: 50px; height: 50px; background-color: rgba(255,255,255,0.2); border-radius: 50%; margin: 0 auto 15px; display: flex; align-items: center; justify-content: center; font-size: 24px;">
                                                         ✉️
                                                     </div>
-                                                    <h1 style="font-size: 20px; font-weight: 600; margin: 0 0 5px 0; color: white;">Verify Your Email</h1>
-                                                    <p style="font-size: 14px; margin: 0; opacity: 0.9; color: white;">Complete your registration in just one click</p>
+                                                    <h1 style="font-size: 20px; font-weight: 600; margin: 0 0 5px 0; color: white;">New Verification Link</h1>
+                                                    <p style="font-size: 14px; margin: 0; opacity: 0.9; color: white;">Complete your registration with this fresh link</p>
                                                 </td>
                                             </tr>
                                             
                                             <!-- Content -->
                                             <tr>
                                                 <td style="padding: 30px 20px; text-align: center;">
-                                                    <div style="font-size: 16px; color: #333; margin-bottom: 10px; font-weight: 500;">Welcome back to Lyvo!</div>
+                                                    <div style="font-size: 16px; color: #333; margin-bottom: 10px; font-weight: 500;">Welcome back to Lyvo+!</div>
                                                     
                                                     <div style="font-size: 14px; color: #666; line-height: 1.4; margin-bottom: 20px;">
-                                                        We noticed your email hasn't been verified yet. To complete your registration and secure your account, please verify your email address by clicking the button below.
+                                                        You've requested a new verification link. Please use this fresh link to complete your account setup and secure your account.
                                                     </div>
                                                     
                                                     <div style="background-color: #f8f9fa; padding: 12px; border-radius: 6px; margin: 15px 0; border-left: 4px solid #e53e3e; text-align: left;">
@@ -1094,7 +1101,7 @@ const googleSignIn = async (req, res) => {
         // Verify the Google token
         const ticket = await googleClient.verifyIdToken({
             idToken: credential,
-            audience: process.env.GOOGLE_CLIENT_ID,
+            audience: process.env.GOOGLE_CLIENT_ID || '864948749872-dh9vc6atlj2psgd53oiqg99kqgdbusfe.apps.googleusercontent.com',
         });
 
         const payload = ticket.getPayload();
@@ -1124,6 +1131,14 @@ const googleSignIn = async (req, res) => {
                 if (!user.profilePicture) {
                     user.profilePicture = picture;
                 }
+                await user.save();
+            }
+            
+            // If role is provided and different from current role, update it
+            // This handles cases where user signs up with different role via Google
+            if (role !== undefined && user.role !== role) {
+                console.log(`Updating user role from ${user.role} to ${role} for ${user.email}`);
+                user.role = role;
                 await user.save();
             }
         }
@@ -1227,19 +1242,6 @@ const uploadProfilePicture = async (req, res) => {
             phone: user.phone,
             location: user.location,
             bio: user.bio,
-            occupation: user.occupation,
-            company: user.company,
-            workSchedule: user.workSchedule,
-            preferredLocation: user.preferredLocation,
-            budget: user.budget,
-            roomType: user.roomType,
-            genderPreference: user.genderPreference,
-            lifestyle: user.lifestyle,
-            cleanliness: user.cleanliness,
-            noiseLevel: user.noiseLevel,
-            smoking: user.smoking,
-            pets: user.pets,
-            amenities: user.amenities,
             createdAt: user.createdAt,
             updatedAt: user.updatedAt
         };
@@ -1736,13 +1738,159 @@ module.exports = {
             }
 
             const user = await User.findOne({ email: email.toLowerCase().trim() });
-            return res.json({ 
-                exists: !!user,
-                message: user ? 'Email already registered' : 'Email is available'
-            });
+            
+            if (user) {
+                // If user exists but is not verified, consider email as available
+                if (!user.isVerified) {
+                    return res.json({ 
+                        exists: false,
+                        message: 'Email is available',
+                        isUnverified: true,
+                        note: 'This email was previously registered but not verified. You can register again.'
+                    });
+                } else {
+                    // User exists and is verified
+                    return res.json({ 
+                        exists: true,
+                        message: 'Email already registered. Please use a different email.',
+                        isVerified: true
+                    });
+                }
+            } else {
+                // Email is completely new
+                return res.json({ 
+                    exists: false,
+                    message: 'Email is available'
+                });
+            }
         } catch (e) {
             console.error('checkEmailExists error:', e);
             return res.status(500).json({ message: 'Server error' });
+        }
+    },
+
+    // Resend verification email for existing unverified users
+    resendVerificationEmail: async (req, res) => {
+        try {
+            const { email } = req.body;
+            
+            if (!email) {
+                return res.status(400).json({ message: 'Email is required' });
+            }
+
+            // Find user by email
+            const user = await User.findOne({ email: email.toLowerCase().trim() });
+            
+            if (!user) {
+                return res.status(404).json({ 
+                    message: 'No account found with this email address. Please sign up first.' 
+                });
+            }
+
+            if (user.isVerified) {
+                return res.status(400).json({ 
+                    message: 'This email is already verified. Please log in to your account.' 
+                });
+            }
+
+            // Generate new verification token
+            const verificationToken = crypto.randomBytes(32).toString('hex');
+            const verificationTokenExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+            
+            // Update user with new verification token
+            user.verificationToken = verificationToken;
+            user.verificationTokenExpires = verificationTokenExpires;
+            await user.save();
+            
+            // Create verification link
+            const verificationLink = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/verify-email?token=${verificationToken}`;
+            
+            // Send verification email
+            const msg = {
+                to: email,
+                from: process.env.SENDGRID_FROM_EMAIL || 'noreply@lyvo.com',
+                subject: 'Verify Your Lyvo+ Account - New Verification Link',
+                text: `
+Hello ${user.name},
+
+You requested a new verification link for your Lyvo+ account.
+
+Please click the link below to verify your email address:
+${verificationLink}
+
+This link will expire in 24 hours.
+
+If you didn't request this verification email, please ignore this message.
+
+Best regards,
+The Lyvo+ Team
+                `,
+                html: `
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Verify Your Lyvo+ Account</title>
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+        .header { background: linear-gradient(135deg, #dc2626, #b91c1c); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }
+        .content { background: #f9fafb; padding: 30px; border-radius: 0 0 10px 10px; }
+        .button { display: inline-block; background: #dc2626; color: white; padding: 15px 30px; text-decoration: none; border-radius: 5px; margin: 20px 0; }
+        .footer { text-align: center; margin-top: 30px; color: #666; font-size: 14px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔐 Verify Your Lyvo+ Account</h1>
+            <p>New Verification Link Requested</p>
+        </div>
+        <div class="content">
+            <h2>Hello ${user.name}!</h2>
+            <p>You requested a new verification link for your Lyvo+ account.</p>
+            <p>Please click the button below to verify your email address:</p>
+            <div style="text-align: center;">
+                <a href="${verificationLink}" class="button">Verify My Email</a>
+            </div>
+            <p><strong>Important:</strong> This link will expire in 24 hours.</p>
+            <p>If you didn't request this verification email, please ignore this message.</p>
+            <p>If the button doesn't work, you can copy and paste this link into your browser:</p>
+            <p style="word-break: break-all; background: #e5e7eb; padding: 10px; border-radius: 5px; font-family: monospace;">${verificationLink}</p>
+        </div>
+        <div class="footer">
+            <p>Best regards,<br>The Lyvo+ Team</p>
+            <p>This is an automated message. Please do not reply to this email.</p>
+        </div>
+    </div>
+</body>
+</html>
+                `
+            };
+            
+            // Try to send verification email
+            try {
+                await sgMail.send(msg);
+                console.log('Verification email resent successfully to:', email);
+                
+                return res.status(200).json({ 
+                    message: 'Verification email sent! Please check your email to verify your account.',
+                    emailSent: true,
+                    expiresIn: '24 hours'
+                });
+            } catch (emailError) {
+                console.error('SendGrid error for resend verification:', emailError);
+                
+                return res.status(500).json({ 
+                    message: 'Failed to send verification email. Please try again later.',
+                    emailSent: false,
+                    error: 'Email service temporarily unavailable'
+                });
+            }
+        } catch (error) {
+            console.error('Resend verification error:', error);
+            res.status(500).json({ message: 'Server error during resend verification' });
         }
     }
 }; 

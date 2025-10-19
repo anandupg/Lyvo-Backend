@@ -1,1 +1,3 @@
- 
+@echo off
+echo Starting Lyvo Chat Service...
+npm start
