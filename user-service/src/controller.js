@@ -1004,16 +1004,45 @@ const changePassword = async (req, res) => {
         const { currentPassword, newPassword } = req.body;
         const userId = req.user.id; // From JWT token
 
+        // Validate input
+        if (!currentPassword || !newPassword) {
+            return res.status(400).json({ 
+                success: false,
+                message: 'Both current password and new password are required' 
+            });
+        }
+
+        if (newPassword.length < 8) {
+            return res.status(400).json({ 
+                success: false,
+                message: 'New password must be at least 8 characters long' 
+            });
+        }
+
         // Find user
         const user = await User.findById(userId);
         if (!user) {
-            return res.status(404).json({ message: 'User not found' });
+            return res.status(404).json({ 
+                success: false,
+                message: 'User not found' 
+            });
+        }
+
+        // Check if user has a password set (some users might have signed up with Google)
+        if (!user.password) {
+            return res.status(400).json({ 
+                success: false,
+                message: 'This account was created with social login. Please use "Forgot Password" to set a password first.' 
+            });
         }
 
         // Verify current password
         const isCurrentPasswordValid = await bcrypt.compare(currentPassword, user.password);
         if (!isCurrentPasswordValid) {
-            return res.status(400).json({ message: 'Current password is incorrect' });
+            return res.status(400).json({ 
+                success: false,
+                message: 'Current password is incorrect' 
+            });
         }
 
         // Hash new password
@@ -1023,10 +1052,16 @@ const changePassword = async (req, res) => {
         user.password = hashedNewPassword;
         await user.save();
 
-        res.status(200).json({ message: 'Password updated successfully' });
+        res.status(200).json({ 
+            success: true,
+            message: 'Password updated successfully' 
+        });
     } catch (error) {
         console.error('Change password error:', error);
-        res.status(500).json({ message: 'Server error' });
+        res.status(500).json({ 
+            success: false,
+            message: 'Server error while changing password' 
+        });
     }
 };
 
@@ -1258,7 +1293,251 @@ const uploadProfilePicture = async (req, res) => {
     }
 };
 
+// Create new admin (admin only)
+const createAdmin = async (req, res) => {
+    try {
+        // Verify requester is admin
+        const requesterId = req.user?.id;
+        const requester = await User.findById(requesterId).lean();
+        if (!requester || requester.role !== 2) {
+            return res.status(403).json({ message: 'Admin access required' });
+        }
+
+        const { name, email, password, role } = req.body;
+
+        // Validate input
+        if (!name || !email || !password) {
+            return res.status(400).json({ message: 'Name, email, and password are required' });
+        }
+
+        // Validate name length
+        if (name.trim().length < 2) {
+            return res.status(400).json({ message: 'Name must be at least 2 characters' });
+        }
+        if (name.trim().length > 50) {
+            return res.status(400).json({ message: 'Name must not exceed 50 characters' });
+        }
+
+        // Validate email format
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(email)) {
+            return res.status(400).json({ message: 'Invalid email format' });
+        }
+
+        // Validate role is admin (2)
+        if (role !== 2) {
+            return res.status(400).json({ message: 'Invalid role. Only admin role (2) is allowed' });
+        }
+
+        // Check if email already exists (case-insensitive)
+        const existingUser = await User.findOne({ email: email.toLowerCase().trim() });
+        if (existingUser) {
+            let roleType = 'user';
+            if (existingUser.role === 1) roleType = 'Seeker';
+            else if (existingUser.role === 2) roleType = 'Admin';
+            else if (existingUser.role === 3) roleType = 'Owner';
+            
+            return res.status(400).json({ 
+                message: `This email is already registered as a ${roleType}. Please use a different email address.` 
+            });
+        }
+
+        // Enhanced password validation
+        if (password.length < 8) {
+            return res.status(400).json({ message: 'Password must be at least 8 characters long' });
+        }
+        
+        if (!/[A-Z]/.test(password)) {
+            return res.status(400).json({ message: 'Password must contain at least one uppercase letter' });
+        }
+        
+        if (!/[a-z]/.test(password)) {
+            return res.status(400).json({ message: 'Password must contain at least one lowercase letter' });
+        }
+        
+        if (!/[0-9]/.test(password)) {
+            return res.status(400).json({ message: 'Password must contain at least one number' });
+        }
+        
+        if (!/[!@#$%^&*(),.?":{}|<>]/.test(password)) {
+            return res.status(400).json({ message: 'Password must contain at least one special character' });
+        }
+
+        // Hash password
+        const hashedPassword = await bcrypt.hash(password, 10);
+
+        // Create new admin user
+        const newAdmin = new User({
+            name: name.trim(),
+            email: email.toLowerCase().trim(),
+            password: hashedPassword,
+            role: 2, // Admin role
+            isVerified: true, // Admins are pre-verified
+            isActive: true
+        });
+
+        await newAdmin.save();
+
+        // Send email notification with credentials
+        try {
+            const msg = {
+                to: newAdmin.email,
+                from: process.env.SENDGRID_FROM_EMAIL || 'noreply@lyvo.com',
+                subject: 'Welcome to Lyvo+ Admin Panel - Your Account Details',
+                text: `
+Hello ${newAdmin.name},
+
+Welcome to the Lyvo+ Admin Panel!
+
+An administrator account has been created for you with full access to the system.
+
+Your Login Credentials:
+Email: ${newAdmin.email}
+Password: ${password}
+
+Login URL: ${process.env.FRONTEND_URL || 'http://localhost:3000'}/login
+
+IMPORTANT SECURITY NOTICE:
+- Please change your password after your first login
+- Keep your credentials secure and confidential
+- Do not share your admin access with others
+
+If you did not expect this email or have any concerns, please contact the system administrator immediately.
+
+Best regards,
+The Lyvo+ Team
+                `,
+                html: `
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Welcome to Lyvo+ Admin Panel</title>
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; background-color: #f4f4f4; margin: 0; padding: 0; }
+        .container { max-width: 600px; margin: 20px auto; background: white; border-radius: 10px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        .header { background: linear-gradient(135deg, #7c3aed, #5b21b6); color: white; padding: 30px; text-align: center; }
+        .header h1 { margin: 0; font-size: 28px; }
+        .content { padding: 30px; }
+        .credentials-box { background: #f3e8ff; border-left: 4px solid #7c3aed; padding: 20px; margin: 20px 0; border-radius: 5px; }
+        .credentials-box h3 { margin-top: 0; color: #5b21b6; }
+        .credential-item { margin: 10px 0; }
+        .credential-label { font-weight: bold; color: #5b21b6; display: inline-block; width: 100px; }
+        .credential-value { font-family: monospace; background: white; padding: 5px 10px; border-radius: 3px; display: inline-block; }
+        .button { display: inline-block; background: #7c3aed; color: white; padding: 15px 30px; text-decoration: none; border-radius: 5px; margin: 20px 0; font-weight: bold; }
+        .button:hover { background: #5b21b6; }
+        .security-notice { background: #fef3c7; border-left: 4px solid #f59e0b; padding: 15px; margin: 20px 0; border-radius: 5px; }
+        .security-notice h4 { margin-top: 0; color: #d97706; }
+        .footer { background: #f9fafb; padding: 20px; text-align: center; color: #666; font-size: 14px; }
+        ul { padding-left: 20px; }
+        li { margin: 8px 0; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🛡️ Welcome to Lyvo+ Admin Panel</h1>
+            <p style="margin: 10px 0 0 0; font-size: 16px;">Your administrator account is ready!</p>
+        </div>
+        <div class="content">
+            <h2>Hello ${newAdmin.name}!</h2>
+            <p>An administrator account has been created for you with full access to the Lyvo+ system.</p>
+            
+            <div class="credentials-box">
+                <h3>📋 Your Login Credentials</h3>
+                <div class="credential-item">
+                    <span class="credential-label">Email:</span>
+                    <span class="credential-value">${newAdmin.email}</span>
+                </div>
+                <div class="credential-item">
+                    <span class="credential-label">Password:</span>
+                    <span class="credential-value">${password}</span>
+                </div>
+            </div>
+            
+            <div style="text-align: center;">
+                <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}/login" class="button">Login to Admin Panel</a>
+            </div>
+            
+            <div class="security-notice">
+                <h4>⚠️ IMPORTANT SECURITY NOTICE</h4>
+                <ul style="margin: 10px 0;">
+                    <li><strong>Change your password</strong> after your first login</li>
+                    <li><strong>Keep credentials secure</strong> and confidential</li>
+                    <li><strong>Do not share</strong> your admin access with others</li>
+                    <li><strong>Use a password manager</strong> for secure storage</li>
+                </ul>
+            </div>
+            
+            <h3>🎯 What You Can Do</h3>
+            <p>As an administrator, you have access to:</p>
+            <ul>
+                <li>User Management (Seekers & Owners)</li>
+                <li>Property Approvals & Management</li>
+                <li>Booking Oversight</li>
+                <li>System Settings & Configuration</li>
+                <li>Create Additional Admin Accounts</li>
+            </ul>
+            
+            <p style="margin-top: 30px;">If you did not expect this email or have any concerns, please contact the system administrator immediately.</p>
+        </div>
+        <div class="footer">
+            <p><strong>Best regards,</strong><br>The Lyvo+ Team</p>
+            <p style="margin-top: 10px;">This is an automated message. Please do not reply to this email.</p>
+        </div>
+    </div>
+</body>
+</html>
+                `
+            };
+            
+            await sgMail.send(msg);
+            console.log('Admin creation email sent successfully to:', newAdmin.email);
+        } catch (emailError) {
+            console.error('SendGrid error for admin creation:', emailError);
+            // Don't fail the admin creation if email fails, just log it
+        }
+
+        // Return success (without password)
+        const adminData = {
+            _id: newAdmin._id,
+            name: newAdmin.name,
+            email: newAdmin.email,
+            role: newAdmin.role,
+            isVerified: newAdmin.isVerified,
+            createdAt: newAdmin.createdAt
+        };
+
+        res.status(201).json({
+            success: true,
+            message: 'Admin account created successfully. Login credentials have been sent to the email address.',
+            admin: adminData,
+            emailSent: true
+        });
+
+    } catch (error) {
+        console.error('createAdmin error:', error);
+        res.status(500).json({ message: 'Server error during admin creation' });
+    }
+};
+
 module.exports = {
+    // Export getAllUsers function
+    getAllUsers,
+    // Export other standalone functions
+    registerUser,
+    verifyEmail,
+    loginUser,
+    forgotPassword,
+    resetPassword,
+    getUserProfile,
+    updateUserProfile,
+    changePassword,
+    googleSignIn,
+    uploadProfilePicture,
+    upload,
+    createAdmin,
     // Save behaviour answers and mark onboarding complete
     saveBehaviourAnswers: async (req, res) => {
         try {
@@ -1753,7 +2032,8 @@ module.exports = {
                     return res.json({ 
                         exists: true,
                         message: 'Email already registered. Please use a different email.',
-                        isVerified: true
+                        isVerified: true,
+                        role: user.role // Include role information
                     });
                 }
             } else {

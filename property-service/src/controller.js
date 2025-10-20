@@ -3,6 +3,7 @@ const cloudinary = require('cloudinary').v2;
 const path = require('path');
 const Razorpay = require('razorpay');
 const axios = require('axios');
+const sgMail = require('@sendgrid/mail');
 
 // Room Schema for individual rooms
 const roomSchema = new mongoose.Schema({
@@ -116,6 +117,14 @@ cloudinary.config({
   api_key: process.env.CLOUDINARY_API_KEY,
   api_secret: process.env.CLOUDINARY_API_SECRET
 });
+
+// SendGrid config
+if (process.env.SENDGRID_API_KEY) {
+  sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+  console.log('✅ SendGrid configured for email notifications');
+} else {
+  console.warn('⚠️ SENDGRID_API_KEY not found. Email notifications will not be sent.');
+}
 
 // Razorpay config
 const razorpay = new Razorpay({
@@ -557,7 +566,7 @@ const getAllPropertiesAdmin = async (req, res) => {
 const approvePropertyAdmin = async (req, res) => {
   try {
     const { id } = req.params;
-    const { action } = req.body; // 'approve' | 'reject'
+    const { action, reason } = req.body; // 'approve' | 'reject', optional reason for rejection
     const adminId = req.user?.id;
 
     if (!adminId) {
@@ -577,6 +586,19 @@ const approvePropertyAdmin = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Property not found' });
     }
 
+    // Send notification to owner
+    try {
+      const NotificationService = require('./services/notificationService');
+      if (action === 'approve') {
+        await NotificationService.notifyPropertyApproval(updated, adminId);
+      } else {
+        await NotificationService.notifyPropertyRejection(updated, adminId, reason);
+      }
+    } catch (notifError) {
+      console.error('Error sending notification:', notifError);
+      // Don't fail the approval if notification fails
+    }
+
     return res.json({ success: true, message: 'Property updated', data: updated });
   } catch (error) {
     console.error('Admin approve/reject property error:', error);
@@ -588,7 +610,7 @@ const approvePropertyAdmin = async (req, res) => {
 const approveRoomAdmin = async (req, res) => {
   try {
     const { roomId } = req.params;
-    const { action } = req.body; // 'approve' | 'reject'
+    const { action, reason } = req.body; // 'approve' | 'reject', optional reason for rejection
     const adminId = req.user?.id;
 
     if (!adminId) {
@@ -608,10 +630,180 @@ const approveRoomAdmin = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Room not found' });
     }
 
+    // Find the property to send notification
+    const property = await Property.findOne({ 'rooms._id': roomId });
+    if (property) {
+      try {
+        const NotificationService = require('./services/notificationService');
+        const room = property.rooms.id(roomId);
+        if (action === 'approve') {
+          await NotificationService.notifyRoomApproval(room, property, adminId);
+        } else {
+          await NotificationService.notifyRoomRejection(room, property, adminId, reason);
+        }
+      } catch (notifError) {
+        console.error('Error sending notification:', notifError);
+        // Don't fail the approval if notification fails
+      }
+    }
+
     res.json({ success: true, message: 'Room updated', data: updated });
   } catch (error) {
     console.error('Admin approve/reject room error:', error);
     res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
+// Send custom message from admin to owner
+const sendAdminMessage = async (req, res) => {
+  try {
+    console.log('📨 sendAdminMessage called');
+    console.log('Property ID:', req.params.id);
+    console.log('Message:', req.body.message);
+    
+    const { id } = req.params; // property ID
+    const { message } = req.body;
+    const adminId = req.user?.id;
+
+    if (!adminId) {
+      console.log('❌ No admin ID found');
+      return res.status(401).json({ success: false, message: 'User not authenticated' });
+    }
+    
+    console.log('✅ Admin ID:', adminId);
+
+    if (!message || message.trim().length === 0) {
+      return res.status(400).json({ success: false, message: 'Message cannot be empty' });
+    }
+
+    if (message.length > 500) {
+      return res.status(400).json({ success: false, message: 'Message too long (max 500 characters)' });
+    }
+
+    // Find the property
+    const property = await Property.findById(id);
+    if (!property) {
+      return res.status(404).json({ success: false, message: 'Property not found' });
+    }
+
+    // Fetch owner details from user service to get email
+    let ownerEmail = null;
+    let ownerName = 'Property Owner';
+    try {
+      const userServiceUrl = process.env.USER_SERVICE_URL || 'http://localhost:4002/api';
+      const ownerResponse = await axios.get(`${userServiceUrl}/public/user/${property.owner_id}`);
+      if (ownerResponse.data) {
+        ownerEmail = ownerResponse.data.email;
+        ownerName = ownerResponse.data.name || 'Property Owner';
+      }
+    } catch (err) {
+      console.error('Error fetching owner details:', err.message);
+    }
+
+    // Send notification to owner
+    try {
+      const NotificationService = require('./services/notificationService');
+      await NotificationService.sendAdminMessageToOwner(
+        property.owner_id,
+        property._id,
+        property.property_name,
+        message.trim(),
+        adminId
+      );
+      console.log('✅ Notification created successfully');
+    } catch (notifError) {
+      console.error('Error sending admin message notification:', notifError);
+      return res.status(500).json({ 
+        success: false, 
+        message: 'Failed to send notification',
+        error: notifError.message 
+      });
+    }
+
+    // Send email to owner using SendGrid
+    if (ownerEmail && process.env.SENDGRID_API_KEY) {
+      try {
+        const emailMsg = {
+          to: ownerEmail,
+          from: process.env.SENDGRID_FROM_EMAIL || 'lyvo.company@gmail.com',
+          subject: '📨 Important Message from Lyvo+ Admin',
+          text: `Hello ${ownerName},
+
+You have received an important message from the Lyvo+ Admin Team regarding your property "${property.property_name}".
+
+Message:
+${message.trim()}
+
+Please log in to your dashboard to view more details and take any necessary action.
+
+Best regards,
+The Lyvo+ Team`,
+          html: `
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+              <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; border-radius: 10px 10px 0 0; text-align: center;">
+                <h1 style="color: white; margin: 0; font-size: 24px;">📨 Message from Admin</h1>
+              </div>
+              
+              <div style="padding: 30px 20px; background-color: #ffffff;">
+                <p style="font-size: 16px; color: #333; margin-bottom: 20px;">Hello <strong>${ownerName}</strong>,</p>
+                
+                <p style="font-size: 14px; color: #666; margin-bottom: 20px;">
+                  You have received an important message from the <strong>Lyvo+ Admin Team</strong> regarding your property:
+                </p>
+                
+                <div style="background-color: #f8f9fa; padding: 15px; border-left: 4px solid #667eea; margin: 20px 0; border-radius: 5px;">
+                  <p style="font-size: 14px; color: #555; margin-bottom: 8px;"><strong>Property:</strong> ${property.property_name}</p>
+                </div>
+                
+                <div style="background-color: #fff3cd; padding: 20px; border-radius: 8px; margin: 20px 0; border: 1px solid #ffc107;">
+                  <p style="font-size: 14px; color: #333; margin-bottom: 8px;"><strong>Admin Message:</strong></p>
+                  <p style="font-size: 15px; color: #000; line-height: 1.6; white-space: pre-wrap; margin: 0;">${message.trim()}</p>
+                </div>
+                
+                <p style="font-size: 14px; color: #666; margin: 20px 0;">
+                  Please log in to your dashboard to view more details and take any necessary action.
+                </p>
+                
+                <div style="text-align: center; margin: 30px 0;">
+                  <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}/owner-dashboard" 
+                     style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 12px 30px; text-decoration: none; border-radius: 25px; font-weight: bold; display: inline-block;">
+                    View Dashboard
+                  </a>
+                </div>
+              </div>
+              
+              <div style="background-color: #f8f9fa; padding: 20px; border-radius: 0 0 10px 10px; text-align: center;">
+                <p style="font-size: 12px; color: #999; margin: 0;">
+                  This is an automated message from <strong>Lyvo+</strong><br>
+                  © ${new Date().getFullYear()} Lyvo. All rights reserved.
+                </p>
+              </div>
+            </div>
+          `
+        };
+
+        await sgMail.send(emailMsg);
+        console.log(`✅ Email sent to owner: ${ownerEmail}`);
+      } catch (emailError) {
+        console.error('❌ Error sending email to owner:', emailError);
+        // Don't fail the entire operation if email fails
+      }
+    } else {
+      if (!ownerEmail) {
+        console.log('⚠️ Owner email not found, skipping email notification');
+      }
+      if (!process.env.SENDGRID_API_KEY) {
+        console.log('⚠️ SendGrid not configured, skipping email notification');
+      }
+    }
+
+    return res.json({ 
+      success: true, 
+      message: 'Message sent to owner successfully (notification and email)'
+    });
+  } catch (error) {
+    console.error('Send admin message error:', error);
+    return res.status(500).json({ success: false, message: 'Internal server error' });
   }
 };
 
@@ -1414,6 +1606,30 @@ const createBookingPublic = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Room or Property not found' });
     }
 
+    // Check if room is inactive
+    if (room.status === 'inactive') {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'This room is currently inactive and not available for booking' 
+      });
+    }
+
+    // Check if room is under maintenance
+    if (room.status === 'maintenance') {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'This room is under maintenance and not available for booking' 
+      });
+    }
+
+    // Check if room is available
+    if (!room.is_available) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'This room is not available for booking' 
+      });
+    }
+
     // Fetch user and owner (best-effort)
     let userSnapshot = {};
     let ownerSnapshot = {};
@@ -2002,6 +2218,25 @@ const updateBookingStatus = async (req, res) => {
     
     await booking.save();
 
+    // Fetch property and room for notifications
+    const property = await Property.findById(booking.propertyId);
+    const room = await Room.findById(booking.roomId);
+
+    // Send notification to seeker
+    try {
+      const NotificationService = require('./services/notificationService');
+      const reason = req.body.reason || null; // Optional rejection reason
+      
+      if (action === 'approve') {
+        await NotificationService.notifyBookingApproval(booking, property, room, ownerId);
+      } else {
+        await NotificationService.notifyBookingRejection(booking, property, room, ownerId, reason);
+      }
+    } catch (notifError) {
+      console.error('Error sending booking notification:', notifError);
+      // Don't fail the approval/rejection if notification fails
+    }
+
     // If booking is approved, create a tenant record
     let tenant = null;
     if (action === 'approve') {
@@ -2019,10 +2254,7 @@ const updateBookingStatus = async (req, res) => {
             payment: booking.payment
           });
           
-          // Fetch property and room details
-          const property = await Property.findById(booking.propertyId);
-          const room = await Room.findById(booking.roomId);
-          
+          // Property and room already fetched above for notifications
           console.log('Property found:', !!property);
           console.log('Room found:', !!room);
           
@@ -2687,6 +2919,7 @@ module.exports = {
   approveRoomAdmin,
   // new export added below
   approvePropertyAdmin,
+  sendAdminMessage,
   getRoomPublic,
   getAllRoomsDebug,
   createBookingPublic,

@@ -31,6 +31,10 @@ connectdb();
 const propertyRoutes = require('./routes');
 app.use('/api', propertyRoutes);
 
+// Import and use notification routes
+const notificationRoutes = require('./routes/notificationRoutes');
+app.use('/api/notifications', notificationRoutes);
+
 app.get('/', (req, res) => res.send('Add Property Service Running'));
 
 // Test database connection

@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { getAllUsers, registerUser, verifyEmail, loginUser, forgotPassword, resetPassword, getUserProfile, updateUserProfile, changePassword, googleSignIn, uploadProfilePicture, upload, saveBehaviourAnswers, getBehaviourQuestions, getBehaviourStatus, uploadKycDocuments, adminReviewKyc, toggleUserStatus, checkEmailExists, resendVerificationEmail, getAadharStatus, requireAadharApproval } = require('./controller');
+const { getAllUsers, registerUser, verifyEmail, loginUser, forgotPassword, resetPassword, getUserProfile, updateUserProfile, changePassword, googleSignIn, uploadProfilePicture, upload, saveBehaviourAnswers, getBehaviourQuestions, getBehaviourStatus, uploadKycDocuments, adminReviewKyc, toggleUserStatus, checkEmailExists, resendVerificationEmail, getAadharStatus, requireAadharApproval, createAdmin } = require('./controller');
 const verifyJWT = require('./middleware');
 
 // Public routes
@@ -15,6 +15,7 @@ router.post('/user/resend-verification', resendVerificationEmail);
 
 // Protected routes
 router.get('/user/users', verifyJWT, getAllUsers);
+router.get('/user/all', verifyJWT, getAllUsers); // Alias for getAllUsers
 router.get('/user/profile/:userId', verifyJWT, getUserProfile);
 router.put('/user/profile/:userId', verifyJWT, updateUserProfile);
 
@@ -33,6 +34,8 @@ router.post('/admin/kyc/review', verifyJWT, adminReviewKyc);
 router.get('/user/aadhar-status', verifyJWT, getAadharStatus);
 // Admin user management
 router.patch('/admin/user/:userId/toggle-status', verifyJWT, toggleUserStatus);
+router.patch('/user/:userId/status', verifyJWT, toggleUserStatus); // Alias for toggling user status
+router.post('/admin/create-admin', verifyJWT, createAdmin); // Create new admin
 // Behaviour onboarding
 router.get('/behaviour/questions', verifyJWT, getBehaviourQuestions);
 router.post('/behaviour/answers', verifyJWT, saveBehaviourAnswers);
