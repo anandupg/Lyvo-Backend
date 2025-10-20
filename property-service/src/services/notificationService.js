@@ -1,4 +1,11 @@
 const Notification = require('../models/Notification');
+const sgMail = require('@sendgrid/mail');
+const axios = require('axios');
+
+// Initialize SendGrid
+if (process.env.SENDGRID_API_KEY) {
+  sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+}
 
 class NotificationService {
   /**
@@ -154,10 +161,49 @@ class NotificationService {
   }
 
   /**
+   * Send email notification
+   */
+  static async sendEmail(to, subject, htmlContent) {
+    try {
+      if (!process.env.SENDGRID_API_KEY) {
+        console.log('⚠️ SendGrid not configured, skipping email to:', to);
+        return;
+      }
+
+      const msg = {
+        to,
+        from: process.env.SENDGRID_FROM_EMAIL || 'noreply@lyvo.com',
+        subject,
+        html: htmlContent
+      };
+
+      await sgMail.send(msg);
+      console.log(`✅ Email sent to ${to}: ${subject}`);
+    } catch (error) {
+      console.error('❌ Error sending email:', error.response?.body || error.message);
+    }
+  }
+
+  /**
+   * Get user email by ID
+   */
+  static async getUserEmail(userId) {
+    try {
+      const userServiceUrl = process.env.USER_SERVICE_URL || 'http://localhost:4002/api';
+      const response = await axios.get(`${userServiceUrl}/public/user/${userId}`);
+      return response.data?.email || null;
+    } catch (error) {
+      console.error('Error fetching user email:', error.message);
+      return null;
+    }
+  }
+
+  /**
    * Notify booking approval (to seeker)
    */
   static async notifyBookingApproval(booking, property, room, ownerId) {
-    return await this.createNotification({
+    // Create in-app notification
+    const notification = await this.createNotification({
       recipient_id: booking.userId,
       recipient_type: 'seeker',
       title: 'Booking Approved! 🎉',
@@ -176,13 +222,98 @@ class NotificationService {
         booking_id: booking._id
       }
     });
+
+    // Send email notification
+    try {
+      const userEmail = booking.userSnapshot?.email || await this.getUserEmail(booking.userId);
+      if (userEmail) {
+        const emailHtml = `
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <style>
+              body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+              .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+              .header { background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }
+              .content { background: #f9fafb; padding: 30px; border-radius: 0 0 10px 10px; }
+              .button { display: inline-block; background: #22c55e; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; margin-top: 20px; }
+              .details { background: white; padding: 20px; border-radius: 8px; margin: 20px 0; }
+              .detail-row { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #e5e7eb; }
+              .detail-row:last-child { border-bottom: none; }
+              .label { color: #6b7280; }
+              .value { font-weight: bold; color: #111827; }
+            </style>
+          </head>
+          <body>
+            <div class="container">
+              <div class="header">
+                <h1 style="margin: 0; font-size: 28px;">🎉 Booking Approved!</h1>
+              </div>
+              <div class="content">
+                <p style="font-size: 18px; color: #111827;">Dear ${booking.userSnapshot?.name || 'Valued Guest'},</p>
+                <p>Great news! Your booking has been approved by the property owner.</p>
+                
+                <div class="details">
+                  <h3 style="margin-top: 0; color: #111827;">Booking Details</h3>
+                  <div class="detail-row">
+                    <span class="label">Property:</span>
+                    <span class="value">${property.property_name}</span>
+                  </div>
+                  <div class="detail-row">
+                    <span class="label">Room Number:</span>
+                    <span class="value">${room?.room_number || 'N/A'}</span>
+                  </div>
+                  <div class="detail-row">
+                    <span class="label">Room Type:</span>
+                    <span class="value">${room?.room_type || 'N/A'}</span>
+                  </div>
+                  <div class="detail-row">
+                    <span class="label">Monthly Rent:</span>
+                    <span class="value">₹${room?.rent?.toLocaleString() || 'N/A'}</span>
+                  </div>
+                </div>
+
+                <p><strong>What's Next?</strong></p>
+                <ul>
+                  <li>The owner will contact you to finalize check-in details</li>
+                  <li>Complete your remaining payment (90%) during check-in</li>
+                  <li>Review the property rules and guidelines</li>
+                </ul>
+
+                <div style="text-align: center;">
+                  <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}/booking-dashboard/${booking._id}" class="button">
+                    View Booking Details
+                  </a>
+                </div>
+
+                <p style="margin-top: 30px; color: #6b7280; font-size: 14px;">
+                  If you have any questions, please contact the property owner or our support team.
+                </p>
+              </div>
+            </div>
+          </body>
+          </html>
+        `;
+
+        await this.sendEmail(
+          userEmail,
+          `Booking Approved - ${property.property_name}`,
+          emailHtml
+        );
+      }
+    } catch (emailError) {
+      console.error('Error sending approval email:', emailError);
+    }
+
+    return notification;
   }
 
   /**
    * Notify booking rejection (to seeker)
    */
   static async notifyBookingRejection(booking, property, room, ownerId, reason = null) {
-    return await this.createNotification({
+    // Create in-app notification
+    const notification = await this.createNotification({
       recipient_id: booking.userId,
       recipient_type: 'seeker',
       title: 'Booking Rejected',
@@ -202,6 +333,96 @@ class NotificationService {
         reason
       }
     });
+
+    // Send email notification
+    try {
+      const userEmail = booking.userSnapshot?.email || await this.getUserEmail(booking.userId);
+      if (userEmail) {
+        const emailHtml = `
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <style>
+              body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+              .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+              .header { background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }
+              .content { background: #f9fafb; padding: 30px; border-radius: 0 0 10px 10px; }
+              .button { display: inline-block; background: #3b82f6; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; margin-top: 20px; }
+              .details { background: white; padding: 20px; border-radius: 8px; margin: 20px 0; }
+              .reason-box { background: #fee2e2; border-left: 4px solid #ef4444; padding: 15px; margin: 20px 0; border-radius: 4px; }
+              .detail-row { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #e5e7eb; }
+              .detail-row:last-child { border-bottom: none; }
+              .label { color: #6b7280; }
+              .value { font-weight: bold; color: #111827; }
+            </style>
+          </head>
+          <body>
+            <div class="container">
+              <div class="header">
+                <h1 style="margin: 0; font-size: 28px;">Booking Update</h1>
+              </div>
+              <div class="content">
+                <p style="font-size: 18px; color: #111827;">Dear ${booking.userSnapshot?.name || 'Valued Guest'},</p>
+                <p>We regret to inform you that your booking request has been declined by the property owner.</p>
+                
+                <div class="details">
+                  <h3 style="margin-top: 0; color: #111827;">Booking Details</h3>
+                  <div class="detail-row">
+                    <span class="label">Property:</span>
+                    <span class="value">${property.property_name}</span>
+                  </div>
+                  <div class="detail-row">
+                    <span class="label">Room Number:</span>
+                    <span class="value">${room?.room_number || 'N/A'}</span>
+                  </div>
+                  <div class="detail-row">
+                    <span class="label">Room Type:</span>
+                    <span class="value">${room?.room_type || 'N/A'}</span>
+                  </div>
+                </div>
+
+                ${reason ? `
+                  <div class="reason-box">
+                    <strong style="color: #991b1b;">Reason:</strong>
+                    <p style="margin: 5px 0 0 0; color: #7f1d1d;">${reason}</p>
+                  </div>
+                ` : ''}
+
+                <p><strong>What You Can Do:</strong></p>
+                <ul>
+                  <li>Browse other available properties on Lyvo+</li>
+                  <li>Contact our support team for assistance</li>
+                  <li>Update your preferences and search again</li>
+                </ul>
+
+                <p>Don't worry! We have many other great properties available for you.</p>
+
+                <div style="text-align: center;">
+                  <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}/seeker-dashboard" class="button">
+                    Browse Available Properties
+                  </a>
+                </div>
+
+                <p style="margin-top: 30px; color: #6b7280; font-size: 14px;">
+                  If you have any questions, please contact our support team.
+                </p>
+              </div>
+            </div>
+          </body>
+          </html>
+        `;
+
+        await this.sendEmail(
+          userEmail,
+          `Booking Update - ${property.property_name}`,
+          emailHtml
+        );
+      }
+    } catch (emailError) {
+      console.error('Error sending rejection email:', emailError);
+    }
+
+    return notification;
   }
 
   /**

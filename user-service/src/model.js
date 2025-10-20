@@ -38,6 +38,23 @@ const userSchema = new mongoose.Schema({
         default: null,
         trim: true
     },
+    // Additional profile fields
+    age: {
+        type: Number,
+        default: null,
+        min: 0,
+        max: 120
+    },
+    occupation: {
+        type: String,
+        default: null,
+        trim: true
+    },
+    gender: {
+        type: String,
+        enum: ['male', 'female', 'other', null],
+        default: null
+    },
     bio: {
         type: String,
         default: null,

@@ -4,7 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const { createClient } = require('@supabase/supabase-js');
 const jwt = require('jsonwebtoken');
-const { addProperty, getProperties, getProperty, getPropertyAdmin, getApprovedPropertiesPublic, getApprovedPropertyPublic, updateRoomStatus, updateRoom, updateProperty, getAllPropertiesAdmin, approveRoomAdmin, approvePropertyAdmin, sendAdminMessage, getRoomPublic, getAllRoomsDebug, createBookingPublic, listOwnerBookings, getPendingApprovalBookings, checkUserBookingStatus, getUserBookings, getBookingDetails, getAllBookingsDebug, lookupBookingDetails, updateBookingStatus, createPaymentOrder, verifyPaymentAndCreateBooking, addToFavorites, removeFromFavorites, getUserFavorites, checkFavoriteStatus, createMissingTenantRecords, getOwnerTenants, getPropertyTenants, getTenantDetails, getUserTenantRecords, updateTenantDetails, markTenantCheckIn, markTenantCheckOut, getRoomTenants } = require('./controller');
+const { addProperty, getProperties, getProperty, getPropertyAdmin, getApprovedPropertiesPublic, getApprovedPropertyPublic, updateRoomStatus, updateRoom, updateProperty, getAllPropertiesAdmin, approveRoomAdmin, approvePropertyAdmin, sendAdminMessage, getRoomPublic, getAllRoomsDebug, createBookingPublic, listOwnerBookings, getPendingApprovalBookings, checkUserBookingStatus, getUserBookings, getBookingDetails, getAllBookingsDebug, lookupBookingDetails, updateBookingStatus, cancelAndDeleteBooking, createPaymentOrder, verifyPaymentAndCreateBooking, addToFavorites, removeFromFavorites, getUserFavorites, checkFavoriteStatus, createMissingTenantRecords, getOwnerTenants, getPropertyTenants, getTenantDetails, getUserTenantRecords, updateTenantDetails, markTenantCheckIn, markTenantCheckOut, getRoomTenants } = require('./controller');
 const axios = require('axios');
 
 const router = express.Router();
@@ -253,6 +253,7 @@ router.get('/public/bookings/:bookingId', getBookingDetails);
 router.get('/debug/bookings', getAllBookingsDebug);
 router.get('/bookings/lookup', lookupBookingDetails);
 router.post('/bookings/:bookingId/status', authenticateUser, updateBookingStatus);
+router.delete('/bookings/:bookingId', authenticateUser, cancelAndDeleteBooking);
 
 // Favorites routes
 router.post('/favorites/add', addToFavorites);

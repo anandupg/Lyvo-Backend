@@ -1425,10 +1425,12 @@ const createPaymentOrder = async (req, res) => {
     const monthlyRent = room.rent;
     const securityDeposit = property.security_deposit;
     const totalAmount = monthlyRent + securityDeposit;
+    const advancePayment = totalAmount * 0.1; // 10% advance to be paid online
+    const remainingPayment = totalAmount * 0.9; // 90% to be paid offline at check-in
 
-    // Create Razorpay order
+    // Create Razorpay order for 10% advance payment only
     const orderOptions = {
-      amount: totalAmount * 100, // Razorpay expects amount in paise
+      amount: Math.round(advancePayment * 100), // Razorpay expects amount in paise (10% of total)
       currency: 'INR',
       receipt: `booking_${Date.now()}`,
       notes: {
@@ -1437,6 +1439,9 @@ const createPaymentOrder = async (req, res) => {
         propertyId,
         monthlyRent,
         securityDeposit,
+        totalAmount,
+        advancePayment,
+        remainingPayment,
         roomType: room.room_type,
         propertyName: property.property_name
       }
@@ -1446,15 +1451,17 @@ const createPaymentOrder = async (req, res) => {
 
     res.json({
       success: true,
-      message: 'Payment order created',
+      message: 'Payment order created for 10% advance',
       order: {
         id: order.id,
-        amount: order.amount,
+        amount: order.amount, // This is now 10% of total in paise
         currency: order.currency,
         receipt: order.receipt
       },
       paymentDetails: {
         totalAmount,
+        advancePayment,
+        remainingPayment,
         monthlyRent,
         securityDeposit,
         roomDetails: {
@@ -2369,6 +2376,101 @@ const getAllBookingsDebug = async (req, res) => {
   }
 };
 
+// Cancel and delete booking (user only - for pending/confirmed bookings)
+const cancelAndDeleteBooking = async (req, res) => {
+  try {
+    const { bookingId } = req.params;
+    const userId = req.user?.id;
+
+    if (!userId) {
+      return res.status(401).json({ success: false, message: 'Unauthorized' });
+    }
+
+    if (!bookingId || bookingId.length !== 24) {
+      return res.status(400).json({ success: false, message: 'Invalid booking ID' });
+    }
+
+    const booking = await Booking.findById(bookingId);
+    
+    if (!booking) {
+      return res.status(404).json({ success: false, message: 'Booking not found' });
+    }
+
+    // Verify the booking belongs to the user
+    if (String(booking.userId) !== String(userId)) {
+      return res.status(403).json({ success: false, message: 'You can only cancel your own bookings' });
+    }
+
+    // Only allow cancellation of pending or confirmed bookings
+    if (!['pending', 'pending_approval', 'confirmed'].includes(booking.status)) {
+      return res.status(400).json({ 
+        success: false, 
+        message: `Cannot cancel booking with status: ${booking.status}` 
+      });
+    }
+
+    // For confirmed bookings, check if check-in is more than 24 hours away
+    if (booking.status === 'confirmed' && booking.checkInDate) {
+      const checkInDate = new Date(booking.checkInDate);
+      const now = new Date();
+      const hoursUntilCheckIn = (checkInDate - now) / (1000 * 60 * 60);
+      
+      if (hoursUntilCheckIn <= 24) {
+        return res.status(400).json({
+          success: false,
+          message: 'Cannot cancel confirmed booking within 24 hours of check-in. Please contact support.'
+        });
+      }
+    }
+
+    // Delete any associated tenant record
+    await Tenant.deleteOne({ bookingId: booking._id });
+
+    // Delete the booking
+    await Booking.findByIdAndDelete(bookingId);
+
+    // Make room available again
+    if (booking.roomId) {
+      await Room.findByIdAndUpdate(booking.roomId, { is_available: true });
+    }
+
+    // Send notification to owner
+    try {
+      const NotificationService = require('./services/notificationService');
+      const property = await Property.findById(booking.propertyId);
+      const room = await Room.findById(booking.roomId);
+      
+      await NotificationService.createNotification({
+        recipient_id: booking.ownerId,
+        recipient_type: 'owner',
+        title: 'Booking Cancelled',
+        message: `${booking.userSnapshot?.name || 'A user'} has cancelled their booking for ${property?.property_name || 'your property'}${room?.room_number ? ` - Room ${room.room_number}` : ''}`,
+        type: 'booking',
+        related_property_id: booking.propertyId,
+        related_room_id: booking.roomId,
+        related_booking_id: booking._id,
+        metadata: {
+          cancelledBy: 'user',
+          cancelledAt: new Date(),
+          bookingStatus: booking.status
+        }
+      });
+    } catch (notifError) {
+      console.error('Error sending cancellation notification:', notifError);
+    }
+
+    return res.json({ 
+      success: true, 
+      message: 'Booking cancelled and removed successfully',
+      deletedBookingId: bookingId
+    });
+
+  } catch (error) {
+    console.error('Error cancelling booking:', error);
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
 // Lookup booking by composite IDs or compose details if not found
 const lookupBookingDetails = async (req, res) => {
   try {
@@ -2864,29 +2966,52 @@ const getRoomTenants = async (req, res) => {
       });
     }
 
-    // Get tenant records for this room
-    const Tenant = mongoose.model('Tenant', tenantSchema);
-    const tenants = await Tenant.find({ 
-      roomId: roomId,
-      status: { $in: ['confirmed', 'checked_in', 'active'] }
-    }).select('name age occupation bio moveInDate status -_id');
+    // Determine tenants by approved/confirmed bookings for this room
+    const approvedBookings = await Booking.find({
+      roomId: String(roomId),
+      status: { $in: ['confirmed', 'approved'] }
+    }).sort({ createdAt: -1 }).limit(50);
 
-    // Format tenant data for public display (privacy protection)
-    const formattedTenants = tenants.map(tenant => ({
-      _id: tenant._id,
-      name: tenant.name || 'Anonymous Tenant',
-      age: tenant.age || null,
-      occupation: tenant.occupation || null,
-      bio: tenant.bio || null,
-      moveInDate: tenant.moveInDate || null,
-      status: tenant.status
-    }));
+    // Enrich tenants with age and occupation from user-service
+    const USER_SERVICE_URL = process.env.USER_SERVICE_URL || 'http://localhost:4002/api';
+    const uniqueUserIds = [...new Set(approvedBookings.map(b => String(b.userId)).filter(Boolean))];
+    const userProfileMap = {};
+    try {
+      const profiles = await Promise.all(uniqueUserIds.map(async (uid) => {
+        try {
+          const resp = await fetch(`${USER_SERVICE_URL}/public/user/${uid}`);
+          if (resp.ok) {
+            const data = await resp.json();
+            userProfileMap[uid] = data || {};
+          }
+        } catch (e) {
+          // ignore per-user errors
+        }
+      }));
+    } catch (e) {
+      // best-effort enrichment; continue without blocking
+    }
 
-    console.log(`Found ${formattedTenants.length} tenants for room ${roomId}`);
+    const tenants = approvedBookings.map(b => {
+      const uid = String(b.userId);
+      const profile = userProfileMap[uid] || {};
+      return {
+        _id: b.userId,
+        name: b.userSnapshot?.name || profile.name || b.userSnapshot?.email || 'Tenant',
+        email: b.userSnapshot?.email || profile.email,
+        phone: b.userSnapshot?.phone || profile.phone,
+        age: profile.age ?? null,
+        occupation: profile.occupation ?? null,
+        moveInDate: b.checkInDate || b.createdAt,
+        status: 'approved'
+      };
+    });
+
+    console.log(`Found ${tenants.length} approved tenants for room ${roomId}`);
 
     return res.json({
       success: true,
-      tenants: formattedTenants,
+      tenants,
       roomInfo: {
         roomNumber: room.room_number,
         roomType: room.room_type,
@@ -2931,6 +3056,7 @@ module.exports = {
   getAllBookingsDebug,
   lookupBookingDetails,
   updateBookingStatus,
+  cancelAndDeleteBooking,
   createPaymentOrder,
   verifyPaymentAndCreateBooking,
   addToFavorites,

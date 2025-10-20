@@ -188,28 +188,30 @@ app.use((error, req, res, next) => {
 /**
  * Graceful Shutdown Handler
  */
-const gracefulShutdown = (signal) => {
+const gracefulShutdown = async (signal) => {
   console.log(`\n🔄 Received ${signal}. Starting graceful shutdown...`);
   
-  server.close(() => {
-    console.log('✅ HTTP server closed');
-    
-    // Close database connection
-    if (global.mongoose) {
-      global.mongoose.connection.close(() => {
-        console.log('✅ Database connection closed');
-        process.exit(0);
+  try {
+    // Close HTTP server
+    await new Promise((resolve) => {
+      server.close(() => {
+        console.log('✅ HTTP server closed');
+        resolve();
       });
-    } else {
-      process.exit(0);
+    });
+    
+    // Close database connection (no callback in Mongoose 7+)
+    if (global.mongoose && global.mongoose.connection) {
+      await global.mongoose.connection.close();
+      console.log('✅ Database connection closed');
     }
-  });
-
-  // Force close after 10 seconds
-  setTimeout(() => {
-    console.error('❌ Could not close connections in time, forcefully shutting down');
+    
+    console.log('✅ Graceful shutdown complete');
+    process.exit(0);
+  } catch (error) {
+    console.error('❌ Error during graceful shutdown:', error);
     process.exit(1);
-  }, 10000);
+  }
 };
 
 // Listen for termination signals
@@ -240,11 +242,11 @@ const startServer = async () => {
       console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
       console.log('=====================================\n');
 
-      // Log connected users count every 30 seconds
-      setInterval(() => {
-        const connectedUsers = socketManager.getConnectedUsersCount();
-        console.log(`👥 Connected users: ${connectedUsers}`);
-      }, 30000);
+      // Optional: Log connected users count every 5 minutes (uncomment if needed)
+      // setInterval(() => {
+      //   const connectedUsers = socketManager.getConnectedUsersCount();
+      //   console.log(`👥 Connected users: ${connectedUsers}`);
+      // }, 300000); // 5 minutes
     });
 
   } catch (error) {
