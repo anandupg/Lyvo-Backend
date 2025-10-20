@@ -4,7 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const { createClient } = require('@supabase/supabase-js');
 const jwt = require('jsonwebtoken');
-const { addProperty, getProperties, getProperty, getPropertyAdmin, getApprovedPropertiesPublic, getApprovedPropertyPublic, updateRoomStatus, updateRoom, updateProperty, getAllPropertiesAdmin, approveRoomAdmin, approvePropertyAdmin, sendAdminMessage, getRoomPublic, getAllRoomsDebug, createBookingPublic, listOwnerBookings, getPendingApprovalBookings, checkUserBookingStatus, getUserBookings, getBookingDetails, getAllBookingsDebug, lookupBookingDetails, updateBookingStatus, cancelAndDeleteBooking, createPaymentOrder, verifyPaymentAndCreateBooking, addToFavorites, removeFromFavorites, getUserFavorites, checkFavoriteStatus, createMissingTenantRecords, getOwnerTenants, getPropertyTenants, getTenantDetails, getUserTenantRecords, updateTenantDetails, markTenantCheckIn, markTenantCheckOut, getRoomTenants } = require('./controller');
+const { addProperty, getProperties, getProperty, getPropertyAdmin, getApprovedPropertiesPublic, getApprovedPropertyPublic, updateRoomStatus, updateRoom, updateProperty, getAllPropertiesAdmin, approveRoomAdmin, approvePropertyAdmin, sendAdminMessage, getRoomPublic, getAllRoomsDebug, createBookingPublic, listOwnerBookings, getPendingApprovalBookings, checkUserBookingStatus, getUserBookings, getBookingDetails, getBookingDetailsPublic, getAllBookingsDebug, lookupBookingDetails, updateBookingStatus, cancelAndDeleteBooking, createPaymentOrder, verifyPaymentAndCreateBooking, addToFavorites, removeFromFavorites, getUserFavorites, checkFavoriteStatus, createMissingTenantRecords, getOwnerTenants, getPropertyTenants, getTenantDetails, getUserTenantRecords, updateTenantDetails, markTenantCheckIn, markTenantCheckOut, getRoomTenants } = require('./controller');
 const axios = require('axios');
 
 const router = express.Router();
@@ -249,7 +249,7 @@ router.get('/owner/bookings/pending-approval', authenticateUser, getPendingAppro
 router.get('/bookings/check-status', checkUserBookingStatus);
 router.get('/bookings/user', getUserBookings);
 router.get('/bookings/:bookingId', authenticateUser, getBookingDetails);
-router.get('/public/bookings/:bookingId', getBookingDetails);
+router.get('/public/bookings/:bookingId', getBookingDetailsPublic);
 router.get('/debug/bookings', getAllBookingsDebug);
 router.get('/bookings/lookup', lookupBookingDetails);
 router.post('/bookings/:bookingId/status', authenticateUser, updateBookingStatus);

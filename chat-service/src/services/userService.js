@@ -9,11 +9,11 @@ class UserService {
   }
 
   /**
-   * Get user details by ID from main backend
+   * Get user details by ID from main backend (including profile picture)
    */
   async getUserDetails(userId) {
     try {
-      const response = await fetch(`${this.mainApiUrl}/user/profile/${userId}`, {
+      const response = await fetch(`${this.mainApiUrl}/public/user/${userId}`, {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json'
@@ -34,12 +34,12 @@ class UserService {
   }
 
   /**
-   * Get tenant details from property service by booking ID
+   * Get tenant details from property service by booking ID (using public endpoint)
    */
   async getTenantDetailsByBooking(bookingId) {
     try {
       const propertyServiceUrl = process.env.PROPERTY_SERVICE_URL || 'http://localhost:3002';
-      const response = await fetch(`${propertyServiceUrl}/api/bookings/${bookingId}`, {
+      const response = await fetch(`${propertyServiceUrl}/api/public/bookings/${bookingId}`, {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json'
@@ -70,12 +70,12 @@ class UserService {
   }
 
   /**
-   * Get owner details from property service by booking ID
+   * Get owner details from property service by booking ID (using public endpoint)
    */
   async getOwnerDetailsByBooking(bookingId) {
     try {
       const propertyServiceUrl = process.env.PROPERTY_SERVICE_URL || 'http://localhost:3002';
-      const response = await fetch(`${propertyServiceUrl}/api/bookings/${bookingId}`, {
+      const response = await fetch(`${propertyServiceUrl}/api/public/bookings/${bookingId}`, {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json'
@@ -132,12 +132,12 @@ class UserService {
   }
 
   /**
-   * Get booking details by ID from property service
+   * Get booking details by ID from property service (using public endpoint)
    */
   async getBookingDetails(bookingId) {
     try {
       const propertyServiceUrl = process.env.PROPERTY_SERVICE_URL || 'http://localhost:3002';
-      const response = await fetch(`${propertyServiceUrl}/api/bookings/${bookingId}`, {
+      const response = await fetch(`${propertyServiceUrl}/api/public/bookings/${bookingId}`, {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json'
@@ -170,34 +170,44 @@ class UserService {
         return chat;
       }
 
-      // Extract owner details from booking
+      // Get actual user profile details for better avatars
+      const [ownerProfile, seekerProfile] = await Promise.all([
+        this.getUserDetails(bookingDetails.ownerId),
+        this.getUserDetails(bookingDetails.userId)
+      ]);
+
+      // Extract owner details from booking with actual profile picture
       const ownerDetails = {
         id: bookingDetails.ownerId,
-        name: bookingDetails.ownerName,
-        email: bookingDetails.ownerEmail,
-        phone: bookingDetails.ownerPhone,
-        avatar: `https://api.dicebear.com/7.x/initials/svg?seed=${bookingDetails.ownerName}`,
+        name: bookingDetails.ownerName || ownerProfile?.name || 'Property Owner',
+        email: bookingDetails.ownerEmail || ownerProfile?.email,
+        phone: bookingDetails.ownerPhone || ownerProfile?.phone,
+        avatar: ownerProfile?.profilePicture || 
+                ownerProfile?.avatar || 
+                `https://api.dicebear.com/7.x/initials/svg?seed=${bookingDetails.ownerName || 'Owner'}`,
         role: 'owner'
       };
 
-      // Extract tenant details from booking
+      // Extract tenant details from booking with actual profile picture
       const seekerDetails = {
         id: bookingDetails.userId,
-        name: bookingDetails.userName,
-        email: bookingDetails.userEmail,
-        phone: bookingDetails.userPhone,
-        avatar: `https://api.dicebear.com/7.x/initials/svg?seed=${bookingDetails.userName}`,
+        name: bookingDetails.userName || seekerProfile?.name || 'Tenant',
+        email: bookingDetails.userEmail || seekerProfile?.email,
+        phone: bookingDetails.userPhone || seekerProfile?.phone,
+        avatar: seekerProfile?.profilePicture || 
+                seekerProfile?.avatar || 
+                `https://api.dicebear.com/7.x/initials/svg?seed=${bookingDetails.userName || 'Tenant'}`,
         role: 'seeker'
       };
 
       // Extract property details from booking
       const propertyDetails = {
         id: bookingDetails.propertyId,
-        name: bookingDetails.propertyName,
-        address: bookingDetails.propertyName, // You might want to fetch full address from property service
+        name: bookingDetails.propertyName || 'Property',
+        address: bookingDetails.propertyName || 'Property Address',
         type: 'Property',
         roomId: bookingDetails.roomId,
-        roomNumber: bookingDetails.roomNumber
+        roomNumber: bookingDetails.roomNumber || 'N/A'
       };
 
       return {

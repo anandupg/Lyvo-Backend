@@ -2183,6 +2183,52 @@ const getBookingDetails = async (req, res) => {
   }
 };
 
+// Public version for chat service integration
+const getBookingDetailsPublic = async (req, res) => {
+  try {
+    const bookingId = req.params.bookingId;
+    if (!bookingId || bookingId.length !== 24) {
+      return res.status(400).json({ success: false, message: 'Invalid booking id' });
+    }
+
+    const booking = await Booking.findById(bookingId);
+    if (!booking) {
+      return res.status(404).json({ success: false, message: 'Booking not found' });
+    }
+
+    // Best-effort enrichment of snapshots (in case older records lack them)
+    let userSnapshot = booking.userSnapshot || {};
+    let ownerSnapshot = booking.ownerSnapshot || {};
+    const userSvc = process.env.USER_SERVICE_URL || 'http://localhost:4002/api';
+    try {
+      const [uResp, oResp] = await Promise.all([
+        userSnapshot?.email ? Promise.resolve({ ok: false }) : fetch(`${userSvc}/public/user/${booking.userId}`),
+        ownerSnapshot?.email ? Promise.resolve({ ok: false }) : fetch(`${userSvc}/public/user/${booking.ownerId}`)
+      ]);
+      if (uResp?.ok) {
+        const u = await uResp.json();
+        userSnapshot = { name: u.name || u.email, email: u.email, phone: u.phone };
+      }
+      if (oResp?.ok) {
+        const o = await oResp.json();
+        ownerSnapshot = { name: o.name || o.email, email: o.email, phone: o.phone };
+      }
+    } catch (_) {}
+
+    const enriched = {
+      ...booking.toObject(),
+      userSnapshot,
+      ownerSnapshot
+    };
+
+    // Public access - return booking details without authorization check
+    return res.json({ success: true, booking: enriched, source: 'booking' });
+  } catch (error) {
+    console.error('Get booking details public error:', error);
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
 // Update booking status (owner only)
 const updateBookingStatus = async (req, res) => {
   try {
@@ -2346,10 +2392,41 @@ const updateBookingStatus = async (req, res) => {
         console.error('Booking data:', JSON.stringify(booking, null, 2));
         // Don't fail the approval if tenant creation fails
       }
+
+      // Initiate chat between owner and seeker
+      try {
+        const chatServiceUrl = process.env.CHAT_SERVICE_URL || 'http://localhost:3004';
+        const internalApiKey = process.env.INTERNAL_API_KEY || 'your-internal-api-key-here';
+        
+        const chatInitiationData = {
+          bookingId: booking._id.toString(),
+          ownerId: booking.ownerId,
+          seekerId: booking.userId
+        };
+
+        console.log('Initiating chat for booking:', chatInitiationData);
+
+        const chatResponse = await axios.post(`${chatServiceUrl}/api/chat/initiate`, chatInitiationData, {
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': internalApiKey
+          }
+        });
+
+        if (chatResponse.data.success) {
+          console.log('✅ Chat initiated successfully:', chatResponse.data.data.chatId);
+        } else {
+          console.error('❌ Chat initiation failed:', chatResponse.data.message);
+        }
+      } catch (chatError) {
+        console.error('Error initiating chat:', chatError.message);
+        console.error('Chat error details:', chatError.response?.data || chatError.message);
+        // Don't fail the approval if chat initiation fails
+      }
     }
 
     const message = action === 'approve' 
-      ? 'Booking approved successfully and tenant record created' 
+      ? 'Booking approved successfully, tenant record created, and chat initiated' 
       : 'Booking rejected';
 
     return res.json({ 
@@ -3053,6 +3130,7 @@ module.exports = {
   checkUserBookingStatus,
   getUserBookings,
   getBookingDetails,
+  getBookingDetailsPublic,
   getAllBookingsDebug,
   lookupBookingDetails,
   updateBookingStatus,

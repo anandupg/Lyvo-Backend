@@ -139,8 +139,7 @@ messageSchema.statics.findByChatId = function(chatId, options = {}) {
   return this.find({ chatId })
     .sort(sort)
     .skip(skip)
-    .limit(limit)
-    .populate('replyTo', 'content senderId createdAt');
+    .limit(limit);
 };
 
 // Static method to get unread message count for user in chat
