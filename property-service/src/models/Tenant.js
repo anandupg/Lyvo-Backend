@@ -145,6 +145,15 @@ const tenantSchema = new mongoose.Schema({
   confirmedAt: {
     type: Date,
   },
+
+  // Cancellation Information
+  cancelledBy: { type: String, enum: ['user', 'owner', 'admin', null], default: null },
+  cancelledAt: { type: Date, default: null },
+  cancellationReason: { type: String, default: null },
+
+  // Soft Delete
+  isDeleted: { type: Boolean, default: false },
+  deletedAt: { type: Date, default: null },
 });
 
 // Indexes for efficient queries

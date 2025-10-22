@@ -208,5 +208,49 @@ router.post('/', async (req, res) => {
   }
 });
 
+// Test endpoint to create a booking request notification
+router.post('/test-booking-request', async (req, res) => {
+  try {
+    const { ownerId, propertyName, bookingId, seekerId } = req.body;
+    
+    if (!ownerId || !propertyName || !bookingId || !seekerId) {
+      return res.status(400).json({
+        success: false,
+        message: 'ownerId, propertyName, bookingId, and seekerId are required'
+      });
+    }
+
+    const notification = new Notification({
+      recipient_id: ownerId,
+      recipient_type: 'owner',
+      title: 'New Booking Request',
+      message: `You have a new booking request for "${propertyName}"`,
+      type: 'booking_request',
+      related_booking_id: bookingId,
+      action_url: `/owner-bookings/${bookingId}`,
+      created_by: seekerId,
+      metadata: {
+        property_name: propertyName,
+        booking_id: bookingId
+      }
+    });
+
+    await notification.save();
+
+    res.status(201).json({
+      success: true,
+      data: notification,
+      message: 'Test notification created successfully'
+    });
+  } catch (error) {
+    console.error('Error creating test notification:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to create test notification',
+      error: error.message
+    });
+  }
+});
+
 module.exports = router;
 

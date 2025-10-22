@@ -4,9 +4,15 @@ const app = express();
 const mongoose = require('mongoose'); // Correct import
 
 // CORS middleware
+const allowedOrigins = process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : [
+  'http://localhost:3000',
+  'http://localhost:5173',
+  'http://192.168.1.6:3000'
+];
+
 app.use(cors({
-  origin: ['http://localhost:3000', 'http://localhost:5173', 'http://192.168.1.6:3000'],
-  credentials: true
+  origin: allowedOrigins,
+  credentials: true // Crucial for sending cookies/tokens back and forth
 }));
 
 app.use(express.json());

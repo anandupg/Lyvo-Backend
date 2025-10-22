@@ -25,6 +25,13 @@ class NotificationService {
     metadata = {}
   }) {
     try {
+      console.log('🔔 createNotification called with:');
+      console.log('Recipient ID:', recipient_id);
+      console.log('Recipient Type:', recipient_type);
+      console.log('Title:', title);
+      console.log('Message:', message);
+      console.log('Type:', type);
+      
       const notification = new Notification({
         recipient_id,
         recipient_type,
@@ -39,11 +46,15 @@ class NotificationService {
         metadata
       });
 
+      console.log('Notification object created:', notification);
       await notification.save();
       console.log(`✅ Notification created for user ${recipient_id}: ${title}`);
+      console.log('Saved notification:', notification);
       return notification;
     } catch (error) {
       console.error('❌ Error creating notification:', error);
+      console.error('Error details:', error.message);
+      console.error('Error stack:', error.stack);
       throw error;
     }
   }
@@ -142,7 +153,13 @@ class NotificationService {
    * Notify booking request (to owner)
    */
   static async notifyBookingRequest(booking, property, seekerId) {
-    return await this.createNotification({
+    console.log('🔔 notifyBookingRequest called with:');
+    console.log('Booking:', booking._id);
+    console.log('Property:', property._id, property.property_name);
+    console.log('Owner ID:', property.owner_id);
+    console.log('Seeker ID:', seekerId);
+    
+    const notificationData = {
       recipient_id: property.owner_id,
       recipient_type: 'owner',
       title: 'New Booking Request',
@@ -157,7 +174,11 @@ class NotificationService {
         property_id: property._id,
         booking_id: booking._id
       }
-    });
+    };
+    
+    console.log('Notification data:', notificationData);
+    
+    return await this.createNotification(notificationData);
   }
 
   /**

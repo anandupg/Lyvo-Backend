@@ -127,6 +127,20 @@ router.post('/initiate',
   ChatController.initiateChat
 );
 
+router.post('/delete-by-booking',
+  internalApiKeyMiddleware,
+  [
+    body('bookingId')
+      .notEmpty()
+      .withMessage('Booking ID is required')
+      .isString()
+      .withMessage('Booking ID must be a string')
+      .trim()
+  ],
+  handleValidationErrors,
+  ChatController.deleteChatByBookingId
+);
+
 // Public API routes (require JWT authentication)
 router.get('/user/:userId',
   authMiddleware,
@@ -202,6 +216,13 @@ router.get('/docs', (req, res) => {
           bookingId: 'string (required)',
           ownerId: 'string (required)',
           seekerId: 'string (required)'
+        }
+      },
+      'POST /api/chat/delete-by-booking': {
+        description: 'Delete chat and all messages when booking is cancelled',
+        authentication: 'Internal API Key',
+        body: {
+          bookingId: 'string (required)'
         }
       },
       'GET /api/chat/user/:userId': {

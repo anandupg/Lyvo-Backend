@@ -436,6 +436,62 @@ class ChatController {
   }
 
   /**
+   * Delete chat and all messages (called when booking is cancelled)
+   * Internal API endpoint for other services
+   */
+  static async deleteChatByBookingId(req, res) {
+    try {
+      const { bookingId } = req.body;
+
+      if (!bookingId) {
+        return res.status(400).json({
+          success: false,
+          message: 'Booking ID is required',
+          error: 'MISSING_BOOKING_ID'
+        });
+      }
+
+      // Find chat by booking ID
+      const chat = await Chat.findByBookingId(bookingId);
+      
+      if (!chat) {
+        return res.status(404).json({
+          success: false,
+          message: 'Chat not found for this booking',
+          error: 'CHAT_NOT_FOUND'
+        });
+      }
+
+      // Delete all messages in the chat
+      const deletedMessages = await Message.deleteMany({ chatId: chat._id });
+      
+      // Delete the chat itself
+      await Chat.findByIdAndDelete(chat._id);
+
+      console.log(`✅ Chat deleted for booking ${bookingId}: ${deletedMessages.deletedCount} messages deleted`);
+
+      res.status(200).json({
+        success: true,
+        message: 'Chat and messages deleted successfully',
+        data: {
+          bookingId,
+          chatId: chat._id,
+          deletedMessagesCount: deletedMessages.deletedCount,
+          deletedAt: new Date()
+        }
+      });
+
+    } catch (error) {
+      console.error('Error deleting chat:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Failed to delete chat',
+        error: error.message
+      });
+    }
+  }
+
+  /**
    * Get chat details
    */
   static async getChatDetails(req, res) {

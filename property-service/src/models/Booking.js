@@ -12,6 +12,18 @@ const bookingSchema = new mongoose.Schema({
   approvedAt: { type: Date, default: null },
   approvedBy: { type: String, default: null },
 
+  // Check-in Information
+  checkInDate: { type: Date, default: null },
+
+  // Cancellation Information
+  cancelledBy: { type: String, enum: ['user', 'owner', 'admin', null], default: null },
+  cancelledAt: { type: Date, default: null },
+  cancellationReason: { type: String, default: null },
+
+  // Soft Delete
+  isDeleted: { type: Boolean, default: false },
+  deletedAt: { type: Date, default: null },
+
   // Payment Information
   payment: {
     totalAmount: { type: Number, required: true },

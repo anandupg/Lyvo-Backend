@@ -29,6 +29,7 @@ const roomSchema = new mongoose.Schema({
   toilet_image: { type: String, default: null },
   is_available: { type: Boolean, default: true },
   status: { type: String, enum: ['active', 'inactive', 'maintenance'], default: 'active' },
+  room_status: { type: String, enum: ['available', 'full', 'maintenance'], default: 'available' },
   // Admin approval for rooms
   approval_status: { type: String, enum: ['pending', 'approved', 'rejected'], default: 'pending' },
   approved: { type: Boolean, default: false },
@@ -881,39 +882,103 @@ const getApprovedPropertiesPublic = async (req, res) => {
     const properties = await Property.find({ 
       approved: true,
       approval_status: 'approved',
+      status: 'active', // Only show active properties
       latitude: { $exists: true, $ne: null },
       longitude: { $exists: true, $ne: null }
-    }).select('property_name property_type description max_occupancy address latitude longitude pricing.monthly_rent amenities images owner_id createdAt');
+    }).select('property_name property_mode description address latitude longitude security_deposit amenities images owner_id createdAt status');
 
-    // Transform properties to include owner name and format for frontend
+    // Transform properties to include owner name, rooms data and format for frontend
     const transformedProperties = await Promise.all(properties.map(async (property) => {
       try {
-        // Get owner name from user service
-        const ownerResponse = await fetch(`${process.env.USER_SERVICE_URL || 'http://localhost:4002/api'}/user/profile/${property.owner_id}`, {
+        // Get owner details from user service
+        const ownerResponse = await fetch(`${process.env.USER_SERVICE_URL || 'http://localhost:4002/api'}/public/user/${property.owner_id}`, {
           headers: {
             'Content-Type': 'application/json'
           }
         });
         
-        let ownerName = 'Unknown Owner';
+        let ownerDetails = {
+          name: 'Unknown Owner',
+          email: null,
+          phone: null,
+          profilePicture: null,
+          location: null
+        };
+        
         if (ownerResponse.ok) {
           const ownerData = await ownerResponse.json();
-          ownerName = ownerData.name || ownerData.email || 'Unknown Owner';
+          ownerDetails = {
+            name: ownerData.name || ownerData.email || 'Unknown Owner',
+            email: ownerData.email || null,
+            phone: ownerData.phone || null,
+            profilePicture: ownerData.profilePicture || null,
+            location: ownerData.location || null,
+            bio: ownerData.bio || null
+          };
+        }
+
+        // Fetch approved rooms for this property
+        let rooms = [];
+        try {
+          const roomDocs = await Room.find({ 
+            property_id: property._id, 
+            approval_status: 'approved',
+            status: 'active' // Only show active rooms
+          });
+          
+          // Get tenant counts for each room
+          rooms = await Promise.all(
+            roomDocs.map(async (r) => {
+              const currentTenants = await Tenant.countDocuments({
+                roomId: r._id,
+                status: 'active',
+                isDeleted: { $ne: true }
+              });
+              
+              return {
+                _id: r._id,
+                roomNumber: r.room_number,
+                roomType: r.room_type,
+                roomSize: r.room_size,
+                bedType: r.bed_type,
+                occupancy: r.occupancy,
+                currentTenants: currentTenants,
+                rent: r.rent,
+                amenities: r.amenities || {},
+                description: r.description || '',
+                roomImage: r.room_image || null,
+                toiletImage: r.toilet_image || null,
+                isAvailable: r.is_available,
+                status: r.status,
+                room_status: r.room_status,
+                approvalStatus: r.approval_status
+              };
+            })
+          );
+        } catch (roomError) {
+          console.error('Error fetching rooms for property:', property._id, roomError);
+          rooms = [];
         }
 
         return {
           _id: property._id,
           propertyName: property.property_name,
-          propertyType: property.property_type,
+          propertyType: property.property_mode || 'PG', // Use property_mode instead of property_type
           description: property.description,
-          maxOccupancy: property.max_occupancy,
+          maxOccupancy: property.rooms ? property.rooms.length * 2 : 'N/A', // Calculate from rooms
           address: property.address ? `${property.address.street || ''}, ${property.address.city || ''}, ${property.address.state || ''}`.replace(/^,\s*|,\s*$/g, '') : 'Address not available',
           latitude: property.latitude,
           longitude: property.longitude,
-          rent: property.pricing?.monthly_rent,
+          rent: property.rooms ? property.rooms.reduce((sum, room) => sum + (room.rent || 0), 0) : 0, // Sum of room rents
+          securityDeposit: property.security_deposit, // Direct field access
+          maintenanceCharges: 0, // Not available in schema
+          utilityCharges: 0, // Not available in schema
           amenities: property.amenities || {},
           images: property.images?.images || [],
-          ownerName: ownerName,
+          ownerName: ownerDetails.name,
+          ownerDetails: ownerDetails,
+          rooms: rooms,
+          totalRooms: rooms.length,
           createdAt: property.createdAt
         };
       } catch (error) {
@@ -921,16 +986,28 @@ const getApprovedPropertiesPublic = async (req, res) => {
         return {
           _id: property._id,
           propertyName: property.property_name,
-          propertyType: property.property_type,
+          propertyType: property.property_mode || 'PG', // Use property_mode instead of property_type
           description: property.description,
-          maxOccupancy: property.max_occupancy,
+          maxOccupancy: 'N/A', // Cannot calculate without rooms
           address: property.address ? `${property.address.street || ''}, ${property.address.city || ''}, ${property.address.state || ''}`.replace(/^,\s*|,\s*$/g, '') : 'Address not available',
           latitude: property.latitude,
           longitude: property.longitude,
-          rent: property.pricing?.monthly_rent,
+          rent: 0, // Cannot calculate without rooms
+          securityDeposit: property.security_deposit, // Direct field access
+          maintenanceCharges: 0, // Not available in schema
+          utilityCharges: 0, // Not available in schema
           amenities: property.amenities || {},
           images: property.images?.images || [],
           ownerName: 'Unknown Owner',
+          ownerDetails: {
+            name: 'Unknown Owner',
+            email: null,
+            phone: null,
+            profilePicture: null,
+            location: null
+          },
+          rooms: [],
+          totalRooms: 0,
           createdAt: property.createdAt
         };
       }
@@ -955,50 +1032,92 @@ const getApprovedPropertyPublic = async (req, res) => {
     const property = await Property.findOne({ 
       _id: id,
       approved: true,
-      approval_status: 'approved'
+      approval_status: 'approved',
+      status: 'active' // Only show active properties
     });
 
     if (!property) {
       return res.status(404).json({ success: false, message: 'Property not found or not approved' });
     }
 
-    // Get owner name from user service
-    let ownerName = 'Unknown Owner';
+    // Get owner details from user service
+    let ownerDetails = {
+      name: 'Unknown Owner',
+      email: null,
+      phone: null,
+      profilePicture: null,
+      location: null
+    };
+    
     try {
-      const ownerResponse = await fetch(`${process.env.USER_SERVICE_URL || 'http://localhost:4002/api'}/user/profile/${property.owner_id}`, {
+      console.log('Fetching owner details for property:', property._id, 'owner_id:', property.owner_id);
+      const ownerResponse = await fetch(`${process.env.USER_SERVICE_URL || 'http://localhost:4002/api'}/public/user/${property.owner_id}`, {
         headers: {
           'Content-Type': 'application/json'
         }
       });
       
+      console.log('Owner response status:', ownerResponse.status);
       if (ownerResponse.ok) {
         const ownerData = await ownerResponse.json();
-        ownerName = ownerData.name || ownerData.email || 'Unknown Owner';
+        console.log('Owner data received:', ownerData);
+        
+        ownerDetails = {
+          name: ownerData.name || ownerData.email || 'Unknown Owner',
+          email: ownerData.email || null,
+          phone: ownerData.phone || null,
+          profilePicture: ownerData.profilePicture || null,
+          location: ownerData.location || null,
+          bio: ownerData.bio || null
+        };
+        
+        console.log('Final owner details:', ownerDetails);
+      } else {
+        console.log('Owner response not ok:', ownerResponse.status, ownerResponse.statusText);
+        const errorText = await ownerResponse.text();
+        console.log('Error response body:', errorText);
       }
     } catch (error) {
-      console.error('Error fetching owner for property:', property._id, error);
+      console.error('Error fetching owner details for property:', property._id, error);
     }
 
     // Fetch approved rooms for this property
     let rooms = [];
     try {
-      const roomDocs = await Room.find({ property_id: property._id, approval_status: 'approved' });
-      rooms = roomDocs.map(r => ({
-        _id: r._id,
-        roomNumber: r.room_number,
-        roomType: r.room_type,
-        roomSize: r.room_size,
-        bedType: r.bed_type,
-        occupancy: r.occupancy,
-        rent: r.rent,
-        amenities: r.amenities || {},
-        description: r.description || '',
-        roomImage: r.room_image || null,
-        toiletImage: r.toilet_image || null,
-        isAvailable: r.is_available,
-        status: r.status,
-        approvalStatus: r.approval_status
-      }));
+      const roomDocs = await Room.find({ 
+        property_id: property._id, 
+        approval_status: 'approved',
+        status: 'active' // Only show active rooms
+      });
+      // Get tenant counts for each room
+      rooms = await Promise.all(
+        roomDocs.map(async (r) => {
+          const currentTenants = await Tenant.countDocuments({
+            roomId: r._id,
+            status: 'active',
+            isDeleted: { $ne: true }
+          });
+          
+          return {
+            _id: r._id,
+            roomNumber: r.room_number,
+            roomType: r.room_type,
+            roomSize: r.room_size,
+            bedType: r.bed_type,
+            occupancy: r.occupancy,
+            currentTenants: currentTenants,
+            rent: r.rent,
+            amenities: r.amenities || {},
+            description: r.description || '',
+            roomImage: r.room_image || null,
+            toiletImage: r.toilet_image || null,
+            isAvailable: r.is_available,
+            status: r.status,
+            room_status: r.room_status,
+            approvalStatus: r.approval_status
+          };
+        })
+      );
     } catch (_) {
       rooms = [];
     }
@@ -1007,25 +1126,27 @@ const getApprovedPropertyPublic = async (req, res) => {
     const transformedProperty = {
       _id: property._id,
       propertyName: property.property_name,
-      propertyType: property.property_type,
+      propertyType: property.property_mode || 'PG', // Use property_mode instead of property_type
       description: property.description,
-      maxOccupancy: property.max_occupancy,
+      maxOccupancy: rooms.length * 2, // Calculate from rooms (assuming 2 people per room)
       address: property.address ? `${property.address.street || ''}, ${property.address.city || ''}, ${property.address.state || ''}`.replace(/^,\s*|,\s*$/g, '') : 'Address not available',
       latitude: property.latitude,
       longitude: property.longitude,
-      rent: property.pricing?.monthly_rent,
-      securityDeposit: property.pricing?.security_deposit,
-      maintenanceCharges: property.pricing?.maintenance_charges,
-      utilityCharges: property.pricing?.utility_charges,
+      rent: rooms.reduce((sum, room) => sum + (room.rent || 0), 0), // Sum of room rents
+      securityDeposit: property.security_deposit, // Direct field access
+      maintenanceCharges: 0, // Not available in schema
+      utilityCharges: 0, // Not available in schema
       amenities: property.amenities || {},
       rules: property.rules || {},
       images: property.images || {},
       documents: property.documents || [],
-      ownerName: ownerName,
+      ownerName: ownerDetails.name,
+      ownerDetails: ownerDetails,
       createdAt: property.createdAt,
       rooms
     };
 
+    console.log('Transformed property data:', JSON.stringify(transformedProperty, null, 2));
     res.json({ success: true, property: transformedProperty });
 
   } catch (error) {
@@ -1249,8 +1370,11 @@ const getRoomPublic = async (req, res) => {
       });
     }
 
-    // Find the room (check if it exists first)
-    const room = await Room.findOne({ _id: roomId });
+    // Find the room (check if it exists and is active)
+    const room = await Room.findOne({ 
+      _id: roomId,
+      status: 'active' // Only show active rooms
+    });
 
     if (!room) {
       console.log('Room not found in database');
@@ -1274,8 +1398,11 @@ const getRoomPublic = async (req, res) => {
       property_id: room.property_id
     });
 
-    // Find the associated property
-    const property = await Property.findOne({ _id: room.property_id });
+    // Find the associated property (must be active)
+    const property = await Property.findOne({ 
+      _id: room.property_id,
+      status: 'active' // Only show rooms from active properties
+    });
 
     if (!property) {
       console.log('Property not found for room:', room.property_id);
@@ -1322,6 +1449,13 @@ const getRoomPublic = async (req, res) => {
       };
     }
 
+    // Get current tenant count for this room
+    const currentTenants = await Tenant.countDocuments({
+      roomId: room._id,
+      status: 'active',
+      isDeleted: { $ne: true }
+    });
+
     // Transform room data for frontend
     const transformedRoom = {
       _id: room._id,
@@ -1330,6 +1464,7 @@ const getRoomPublic = async (req, res) => {
       roomSize: room.room_size,
       bedType: room.bed_type,
       occupancy: room.occupancy,
+      currentTenants: currentTenants,
       rent: room.rent,
       amenities: room.amenities || {},
       description: room.description || '',
@@ -1337,6 +1472,7 @@ const getRoomPublic = async (req, res) => {
       toiletImage: room.toilet_image || null,
       isAvailable: room.is_available,
       status: room.status,
+      room_status: room.room_status,
       approvalStatus: room.approval_status
     };
 
@@ -1413,12 +1549,34 @@ const createPaymentOrder = async (req, res) => {
       return res.status(400).json({ success: false, message: 'userId, roomId and propertyId are required' });
     }
 
-    // Fetch room and property details
-    const room = await Room.findOne({ _id: roomId });
-    const property = await Property.findOne({ _id: propertyId });
+    // Fetch room and property details (both must be active and available)
+    const room = await Room.findOne({ 
+      _id: roomId,
+      status: 'active', // Only allow booking for active rooms
+      is_available: true // Only allow booking for available rooms
+    });
+    const property = await Property.findOne({ 
+      _id: propertyId,
+      status: 'active' // Only allow booking for active properties
+    });
+    
+    // Debug logging for payment order creation
+    console.log('🔍 Payment Order Creation Debug:');
+    console.log('User ID:', userId);
+    console.log('Room ID:', roomId);
+    console.log('Property ID:', propertyId);
+    console.log('Room found:', !!room);
+    console.log('Property found:', !!property);
+    if (room) {
+      console.log('Room status:', room.status);
+      console.log('Room is_available:', room.is_available);
+    }
+    if (property) {
+      console.log('Property status:', property.status);
+    }
     
     if (!room || !property) {
-      return res.status(404).json({ success: false, message: 'Room or Property not found' });
+      return res.status(404).json({ success: false, message: 'Room or Property not found, not active, or not available for booking' });
     }
 
     // Calculate payment amounts
@@ -1485,6 +1643,9 @@ const createPaymentOrder = async (req, res) => {
 // Verify Payment and Create Booking
 const verifyPaymentAndCreateBooking = async (req, res) => {
   try {
+    console.log('🔍 Starting payment verification...');
+    console.log('Request body:', req.body);
+    
     const { 
       razorpay_order_id, 
       razorpay_payment_id, 
@@ -1496,9 +1657,23 @@ const verifyPaymentAndCreateBooking = async (req, res) => {
       securityDeposit
     } = req.body;
 
+    console.log('Extracted parameters:', {
+      razorpay_order_id: !!razorpay_order_id,
+      razorpay_payment_id: !!razorpay_payment_id,
+      razorpay_signature: !!razorpay_signature,
+      userId,
+      roomId,
+      propertyId,
+      monthlyRent,
+      securityDeposit
+    });
+
     if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+      console.log('❌ Missing payment verification details');
       return res.status(400).json({ success: false, message: 'Payment verification details missing' });
     }
+
+    console.log('✅ Payment verification details present, proceeding with signature verification...');
 
     // Verify payment signature
     const crypto = require('crypto');
@@ -1508,16 +1683,46 @@ const verifyPaymentAndCreateBooking = async (req, res) => {
       .digest('hex');
 
     if (expectedSignature !== razorpay_signature) {
+      console.log('❌ Invalid payment signature');
+      console.log('Expected:', expectedSignature);
+      console.log('Received:', razorpay_signature);
       return res.status(400).json({ success: false, message: 'Invalid payment signature' });
     }
 
-    // Fetch room and property details
-    const room = await Room.findOne({ _id: roomId });
-    const property = await Property.findOne({ _id: propertyId });
+    console.log('✅ Payment signature verified successfully');
+
+    // Fetch room and property details (both must be active and available)
+    const room = await Room.findOne({ 
+      _id: roomId,
+      status: 'active',        // Only allow booking for active rooms
+      is_available: true       // Only allow booking for available rooms
+    });
+    const property = await Property.findOne({ 
+      _id: propertyId,
+      status: 'active'         // Only allow booking for active properties
+    });
+    
+    // Debug logging for payment verification
+    console.log('🔍 Payment Verification Debug:');
+    console.log('User ID:', userId);
+    console.log('Room ID:', roomId);
+    console.log('Property ID:', propertyId);
+    console.log('Room found:', !!room);
+    console.log('Property found:', !!property);
+    if (room) {
+      console.log('Room status:', room.status);
+      console.log('Room is_available:', room.is_available);
+    }
+    if (property) {
+      console.log('Property status:', property.status);
+    }
     
     if (!room || !property) {
-      return res.status(404).json({ success: false, message: 'Room or Property not found' });
+      console.log('❌ Room or Property not found, not active, or not available');
+      return res.status(404).json({ success: false, message: 'Room or Property not found, not active, or not available for booking' });
     }
+
+    console.log('✅ Room and Property found and available, proceeding with booking creation...');
 
     // Fetch user and owner snapshots
     let userSnapshot = {};
@@ -1539,6 +1744,8 @@ const verifyPaymentAndCreateBooking = async (req, res) => {
     } catch (e) {
       console.warn('Booking snapshot fetch warning:', e?.message);
     }
+
+    console.log('✅ User and owner snapshots fetched, creating booking...');
 
     // Create booking with payment details
     const booking = await Booking.create({
@@ -1580,6 +1787,34 @@ const verifyPaymentAndCreateBooking = async (req, res) => {
       }
     });
 
+    // Send notification to owner about new booking request
+    try {
+      console.log('🔔 Creating notification for payment verified booking request...');
+      console.log('Booking ID:', booking._id);
+      console.log('Property ID:', property._id);
+      console.log('Property Owner ID:', property.owner_id);
+      console.log('Seeker ID:', userId);
+      
+      const NotificationService = require('./services/notificationService');
+      const notification = await NotificationService.notifyBookingRequest(booking, property, userId);
+      console.log(`✅ Booking request notification sent to owner ${property.owner_id}`);
+      console.log('Notification created:', notification);
+    } catch (notificationError) {
+      console.error('❌ Error sending booking request notification:', notificationError);
+      console.error('Error details:', notificationError.message);
+      console.error('Error stack:', notificationError.stack);
+      // Don't fail the booking creation if notification fails
+    }
+
+    // Mark room as unavailable after successful booking creation
+    try {
+      await Room.findByIdAndUpdate(room._id, { is_available: false });
+      console.log(`✅ Room ${room._id} marked as unavailable after booking creation`);
+    } catch (roomUpdateError) {
+      console.error('❌ Error updating room availability:', roomUpdateError);
+      // Don't fail the booking creation if room update fails
+    }
+
     res.status(201).json({ 
       success: true, 
       message: 'Payment verified and booking created. Waiting for owner approval.',
@@ -1593,7 +1828,10 @@ const verifyPaymentAndCreateBooking = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Verify payment and create booking error:', error);
+    console.error('❌ Verify payment and create booking error:', error);
+    console.error('❌ Error message:', error.message);
+    console.error('❌ Error stack:', error.stack);
+    console.error('❌ Request body:', req.body);
     res.status(500).json({ success: false, message: 'Failed to verify payment and create booking' });
   }
 };
@@ -1702,6 +1940,34 @@ const createBookingPublic = async (req, res) => {
       }
     });
 
+    // Send notification to owner about new booking request
+    try {
+      console.log('🔔 Creating notification for booking request...');
+      console.log('Booking ID:', booking._id);
+      console.log('Property ID:', property._id);
+      console.log('Property Owner ID:', property.owner_id);
+      console.log('Seeker ID:', userId);
+      
+      const NotificationService = require('./services/notificationService');
+      const notification = await NotificationService.notifyBookingRequest(booking, property, userId);
+      console.log(`✅ Booking request notification sent to owner ${property.owner_id}`);
+      console.log('Notification created:', notification);
+    } catch (notificationError) {
+      console.error('❌ Error sending booking request notification:', notificationError);
+      console.error('Error details:', notificationError.message);
+      console.error('Error stack:', notificationError.stack);
+      // Don't fail the booking creation if notification fails
+    }
+
+    // Mark room as unavailable after successful booking creation
+    try {
+      await Room.findByIdAndUpdate(room._id, { is_available: false });
+      console.log(`✅ Room ${room._id} marked as unavailable after booking creation`);
+    } catch (roomUpdateError) {
+      console.error('❌ Error updating room availability:', roomUpdateError);
+      // Don't fail the booking creation if room update fails
+    }
+
     return res.status(201).json({ success: true, message: 'Booking created', booking });
   } catch (error) {
     console.error('Create booking error:', error);
@@ -1716,7 +1982,10 @@ const listOwnerBookings = async (req, res) => {
     if (!ownerId) {
       return res.status(401).json({ success: false, message: 'Unauthorized' });
     }
-    const bookings = await Booking.find({ ownerId: String(ownerId) }).sort({ createdAt: -1 });
+    const bookings = await Booking.find({ 
+      ownerId: String(ownerId),
+      isDeleted: { $ne: true }
+    }).sort({ createdAt: -1 });
     return res.json({ success: true, bookings });
   } catch (error) {
     console.error('List owner bookings error:', error);
@@ -1734,7 +2003,8 @@ const getPendingApprovalBookings = async (req, res) => {
     
     const pendingBookings = await Booking.find({ 
       ownerId: String(ownerId), 
-      status: 'pending_approval' 
+      status: 'pending_approval',
+      isDeleted: { $ne: true }
     }).sort({ createdAt: -1 });
     
     return res.json({ 
@@ -1765,7 +2035,8 @@ const checkUserBookingStatus = async (req, res) => {
     const existingBooking = await Booking.findOne({
       userId: String(userId),
       roomId: roomId,
-      status: { $in: ['pending_approval', 'confirmed', 'payment_pending'] }
+      status: { $in: ['pending_approval', 'confirmed', 'payment_pending'] },
+      isDeleted: { $ne: true }
     }).sort({ createdAt: -1 });
 
     if (existingBooking) {
@@ -1803,7 +2074,10 @@ const getUserBookings = async (req, res) => {
     }
 
     // Get all bookings for the user with populated room and property details
-    const bookings = await Booking.find({ userId: String(userId) })
+    const bookings = await Booking.find({ 
+      userId: String(userId),
+      isDeleted: { $ne: true }
+    })
       .populate('roomId', 'roomNumber rent amenities room_image toilet_image isAvailable roomType room_type bed_type occupancy room_size description')
       .populate('propertyId', 'propertyName address latitude longitude images amenities propertyType ownerName property_name description owner_id')
       .sort({ createdAt: -1 });
@@ -2141,7 +2415,7 @@ const getBookingDetails = async (req, res) => {
     }
 
     const booking = await Booking.findById(bookingId);
-    if (!booking) {
+    if (!booking || booking.isDeleted) {
       return res.status(404).json({ success: false, message: 'Booking not found' });
     }
 
@@ -2192,7 +2466,7 @@ const getBookingDetailsPublic = async (req, res) => {
     }
 
     const booking = await Booking.findById(bookingId);
-    if (!booking) {
+    if (!booking || booking.isDeleted) {
       return res.status(404).json({ success: false, message: 'Booking not found' });
     }
 
@@ -2247,7 +2521,7 @@ const updateBookingStatus = async (req, res) => {
     }
 
     const booking = await Booking.findById(bookingId);
-    if (!booking) {
+    if (!booking || booking.isDeleted) {
       return res.status(404).json({ success: false, message: 'Booking not found' });
     }
     if (String(booking.ownerId) !== String(ownerId)) {
@@ -2295,7 +2569,10 @@ const updateBookingStatus = async (req, res) => {
     if (action === 'approve') {
       try {
         // Check if tenant record already exists for this booking
-        const existingTenant = await Tenant.findOne({ bookingId: booking._id });
+        const existingTenant = await Tenant.findOne({ 
+          bookingId: booking._id,
+          isDeleted: { $ne: true }
+        });
         
         if (!existingTenant) {
           console.log(`Creating tenant for booking ${booking._id}`);
@@ -2398,6 +2675,14 @@ const updateBookingStatus = async (req, res) => {
         const chatServiceUrl = process.env.CHAT_SERVICE_URL || 'http://localhost:3004';
         const internalApiKey = process.env.INTERNAL_API_KEY || 'your-internal-api-key-here';
         
+        console.log('🔍 Chat Service Configuration:', {
+          chatServiceUrl,
+          internalApiKey: internalApiKey ? 'SET' : 'NOT SET',
+          bookingId: booking._id.toString(),
+          ownerId: booking.ownerId,
+          seekerId: booking.userId
+        });
+        
         const chatInitiationData = {
           bookingId: booking._id.toString(),
           ownerId: booking.ownerId,
@@ -2421,12 +2706,23 @@ const updateBookingStatus = async (req, res) => {
       } catch (chatError) {
         console.error('Error initiating chat:', chatError.message);
         console.error('Chat error details:', chatError.response?.data || chatError.message);
+        console.error('Chat error status:', chatError.response?.status);
+        console.error('Chat error headers:', chatError.response?.headers);
         // Don't fail the approval if chat initiation fails
+      }
+
+      // Update room occupancy status after approval
+      try {
+        await updateRoomOccupancyStatus(booking.roomId);
+        console.log(`✅ Room occupancy status updated for room ${booking.roomId}`);
+      } catch (occupancyError) {
+        console.error('Error updating room occupancy:', occupancyError);
+        // Don't fail the approval if occupancy update fails
       }
     }
 
     const message = action === 'approve' 
-      ? 'Booking approved successfully, tenant record created, and chat initiated' 
+      ? 'Booking approved successfully, tenant record created, chat initiated, and room occupancy updated' 
       : 'Booking rejected';
 
     return res.json({ 
@@ -2469,7 +2765,7 @@ const cancelAndDeleteBooking = async (req, res) => {
 
     const booking = await Booking.findById(bookingId);
     
-    if (!booking) {
+    if (!booking || booking.isDeleted) {
       return res.status(404).json({ success: false, message: 'Booking not found' });
     }
 
@@ -2478,11 +2774,12 @@ const cancelAndDeleteBooking = async (req, res) => {
       return res.status(403).json({ success: false, message: 'You can only cancel your own bookings' });
     }
 
-    // Only allow cancellation of pending or confirmed bookings
-    if (!['pending', 'pending_approval', 'confirmed'].includes(booking.status)) {
+    // Allow deletion of pending, confirmed, and rejected bookings
+    // Rejected bookings can be removed by users, confirmed bookings have additional checks
+    if (!['pending', 'pending_approval', 'confirmed', 'rejected'].includes(booking.status)) {
       return res.status(400).json({ 
         success: false, 
-        message: `Cannot cancel booking with status: ${booking.status}` 
+        message: `Cannot delete booking with status: ${booking.status}` 
       });
     }
 
@@ -2500,46 +2797,94 @@ const cancelAndDeleteBooking = async (req, res) => {
       }
     }
 
-    // Delete any associated tenant record
-    await Tenant.deleteOne({ bookingId: booking._id });
+    // Soft delete the booking instead of hard delete
+    booking.status = 'cancelled';
+    booking.cancelledBy = 'user';
+    booking.cancelledAt = new Date();
+    booking.isDeleted = true;
+    booking.deletedAt = new Date();
+    await booking.save();
 
-    // Delete the booking
-    await Booking.findByIdAndDelete(bookingId);
+    // Soft delete any associated tenant record
+    await Tenant.updateOne(
+      { bookingId: booking._id },
+      { 
+        isDeleted: true, 
+        deletedAt: new Date(),
+        status: 'terminated',
+        cancelledBy: 'user',
+        cancelledAt: new Date(),
+        cancellationReason: 'Booking cancelled by user'
+      }
+    );
 
-    // Make room available again
+    // Make room available again (only for non-rejected bookings)
     if (booking.roomId) {
       await Room.findByIdAndUpdate(booking.roomId, { is_available: true });
     }
 
-    // Send notification to owner
+    // Delete chat and all messages between user and owner
     try {
-      const NotificationService = require('./services/notificationService');
-      const property = await Property.findById(booking.propertyId);
-      const room = await Room.findById(booking.roomId);
-      
-      await NotificationService.createNotification({
-        recipient_id: booking.ownerId,
-        recipient_type: 'owner',
-        title: 'Booking Cancelled',
-        message: `${booking.userSnapshot?.name || 'A user'} has cancelled their booking for ${property?.property_name || 'your property'}${room?.room_number ? ` - Room ${room.room_number}` : ''}`,
-        type: 'booking',
-        related_property_id: booking.propertyId,
-        related_room_id: booking.roomId,
-        related_booking_id: booking._id,
-        metadata: {
-          cancelledBy: 'user',
-          cancelledAt: new Date(),
-          bookingStatus: booking.status
+      const chatServiceUrl = process.env.CHAT_SERVICE_URL || 'http://localhost:3004';
+      const chatResponse = await axios.post(`${chatServiceUrl}/api/chat/delete-by-booking`, {
+        bookingId: booking._id.toString()
+      }, {
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': process.env.INTERNAL_API_KEY || 'your-internal-api-key'
         }
       });
-    } catch (notifError) {
-      console.error('Error sending cancellation notification:', notifError);
+
+      if (chatResponse.data.success) {
+        console.log(`✅ Chat deleted for booking ${booking._id}: ${chatResponse.data.data.deletedMessagesCount} messages deleted`);
+      } else {
+        console.error('❌ Chat deletion failed:', chatResponse.data.message);
+      }
+    } catch (chatError) {
+      console.error('Error deleting chat:', chatError.message);
+      console.error('Chat error details:', chatError.response?.data || chatError.message);
+      // Don't fail the cancellation if chat deletion fails
+    }
+
+    // Send notification to owner
+    try {
+        const NotificationService = require('./services/notificationService');
+        const property = await Property.findById(booking.propertyId);
+        const room = await Room.findById(booking.roomId);
+        
+        await NotificationService.createNotification({
+          recipient_id: booking.ownerId,
+          recipient_type: 'owner',
+          title: 'Booking Cancelled',
+          message: `${booking.userSnapshot?.name || 'A user'} has cancelled their booking for ${property?.property_name || 'your property'}${room?.room_number ? ` - Room ${room.room_number}` : ''}`,
+          type: 'booking',
+          related_property_id: booking.propertyId,
+          related_room_id: booking.roomId,
+          related_booking_id: booking._id,
+          metadata: {
+            cancelledBy: 'user',
+            cancelledAt: new Date(),
+            bookingStatus: booking.status
+          }
+        });
+      } catch (notifError) {
+        console.error('Error sending cancellation notification:', notifError);
+      }
+
+    // Update room occupancy status after cancellation
+    try {
+      await updateRoomOccupancyStatus(booking.roomId);
+      console.log(`✅ Room occupancy status updated for room ${booking.roomId} after cancellation`);
+    } catch (occupancyError) {
+      console.error('Error updating room occupancy after cancellation:', occupancyError);
+      // Don't fail the cancellation if occupancy update fails
     }
 
     return res.json({ 
       success: true, 
-      message: 'Booking cancelled and removed successfully',
-      deletedBookingId: bookingId
+      message: 'Booking cancelled successfully and room occupancy updated',
+      cancelledBookingId: bookingId,
+      booking: booking
     });
 
   } catch (error) {
@@ -2557,7 +2902,13 @@ const lookupBookingDetails = async (req, res) => {
     }
 
     // 1) Try to find an existing booking
-    const existing = await Booking.findOne({ userId: String(userId), ownerId: String(ownerId), propertyId, roomId }).sort({ createdAt: -1 });
+    const existing = await Booking.findOne({ 
+      userId: String(userId), 
+      ownerId: String(ownerId), 
+      propertyId, 
+      roomId,
+      isDeleted: { $ne: true }
+    }).sort({ createdAt: -1 });
     if (existing) {
       return res.json({ success: true, booking: existing, source: 'booking' });
     }
@@ -2626,17 +2977,87 @@ const lookupBookingDetails = async (req, res) => {
   }
 };
 
+// Update property status (owner only)
+const updatePropertyStatus = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+    const userId = req.user?.id;
+
+    console.log('=== UPDATE PROPERTY STATUS ===');
+    console.log('Property ID:', id);
+    console.log('User ID:', userId);
+    console.log('New Status:', status);
+
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: 'User not authenticated'
+      });
+    }
+
+    // Validate status
+    const validStatuses = ['active', 'inactive'];
+    if (!validStatuses.includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid status. Must be one of: active, inactive'
+      });
+    }
+
+    // Find and update the property
+    const property = await Property.findOneAndUpdate(
+      { 
+        _id: id,
+        owner_id: userId
+      },
+      { 
+        status: status,
+        updated_at: new Date()
+      },
+      { new: true }
+    );
+
+    if (!property) {
+      return res.status(404).json({
+        success: false,
+        message: 'Property not found or you do not have permission to update it'
+      });
+    }
+
+    console.log('Property status updated successfully:', property);
+
+    res.json({
+      success: true,
+      message: 'Property status updated successfully',
+      data: {
+        property_id: property._id,
+        status: property.status,
+        updated_at: property.updated_at
+      }
+    });
+
+  } catch (error) {
+    console.error('Error updating property status:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update property status',
+      error: error.message
+    });
+  }
+};
+
 // Update property details
 const updateProperty = async (req, res) => {
   try {
     const { id } = req.params;
     const userId = req.user?.id;
-    const updateData = req.body;
 
     console.log('=== UPDATE PROPERTY ===');
     console.log('Property ID:', id);
     console.log('User ID:', userId);
-    console.log('Update Data:', updateData);
+    console.log('Request body keys:', Object.keys(req.body));
+    console.log('Request files:', req.files ? Object.keys(req.files) : 'No files');
 
     if (!userId) {
       return res.status(401).json({
@@ -2652,6 +3073,92 @@ const updateProperty = async (req, res) => {
         success: false,
         message: 'Property not found or you do not have permission to update it'
       });
+    }
+
+    // Parse propertyData from JSON string (like addProperty)
+    let updateData;
+    try {
+      updateData = JSON.parse(req.body.propertyData);
+      console.log('Parsed updateData:', JSON.stringify(updateData, null, 2));
+    } catch (parseError) {
+      console.error('JSON parse error:', parseError);
+      console.error('Raw propertyData:', req.body.propertyData);
+      return res.status(400).json({ success: false, message: 'Invalid property data format' });
+    }
+
+    // Upload images if provided (like addProperty)
+    let imageUrls = {};
+    
+    if (req.files && Object.keys(req.files).length > 0) {
+      console.log('=== PROCESSING IMAGE UPLOADS ===');
+      
+      // Convert req.files object to array of files
+      const allFiles = [];
+      Object.values(req.files).forEach(fileArray => {
+        if (Array.isArray(fileArray)) {
+          allFiles.push(...fileArray);
+        } else {
+          allFiles.push(fileArray);
+        }
+      });
+      
+      for (const file of allFiles) {
+        console.log('Processing file:', file.fieldname, file.originalname);
+        try {
+          const uploadResult = await uploadImage(file);
+          console.log('Upload result for', file.fieldname, ':', uploadResult);
+          
+          if (uploadResult.success) {
+            // Handle different file types
+            if (file.fieldname === 'galleryImages') {
+              if (!imageUrls.gallery) imageUrls.gallery = [];
+              imageUrls.gallery.push(uploadResult.url);
+            } else if (file.fieldname === 'outsideToiletImage') {
+              imageUrls.outsideToiletImage = uploadResult.url;
+            } else if (file.fieldname === 'landTaxReceipt') {
+              imageUrls.landTaxReceipt = uploadResult.url;
+            } else if (file.fieldname === 'documents') {
+              if (!imageUrls.documents) imageUrls.documents = [];
+              imageUrls.documents.push(uploadResult.url);
+            } else {
+              // Handle required images (frontImage, backImage, hallImage, kitchenImage)
+              const imageType = file.fieldname.replace('Image', '').toLowerCase();
+              imageUrls[imageType] = uploadResult.url;
+            }
+            console.log('Upload successful:', file.fieldname, uploadResult.url);
+          } else {
+            console.error('Upload failed:', file.fieldname, uploadResult.error);
+          }
+        } catch (uploadError) {
+          console.error('Upload error for file:', file.fieldname, uploadError);
+          // Continue processing other files even if one fails
+        }
+      }
+    }
+
+    // Merge image URLs with update data
+    if (Object.keys(imageUrls).length > 0) {
+      console.log('Merging image URLs:', imageUrls);
+      
+      // Update images object
+      if (!updateData.images) updateData.images = {};
+      
+      // Update individual image fields
+      if (imageUrls.front) updateData.images.front = imageUrls.front;
+      if (imageUrls.back) updateData.images.back = imageUrls.back;
+      if (imageUrls.hall) updateData.images.hall = imageUrls.hall;
+      if (imageUrls.kitchen) updateData.images.kitchen = imageUrls.kitchen;
+      
+      // Update gallery images (append to existing)
+      if (imageUrls.gallery && imageUrls.gallery.length > 0) {
+        if (!updateData.images.gallery) updateData.images.gallery = [];
+        updateData.images.gallery = [...updateData.images.gallery, ...imageUrls.gallery];
+      }
+      
+      // Update other image fields
+      if (imageUrls.outsideToiletImage) updateData.outside_toilet_image = imageUrls.outsideToiletImage;
+      if (imageUrls.landTaxReceipt) updateData.land_tax_receipt = imageUrls.landTaxReceipt;
+      if (imageUrls.documents) updateData.documents = imageUrls.documents;
     }
 
     // Update the property
@@ -2687,7 +3194,10 @@ const createMissingTenantRecords = async (req, res) => {
     console.log('Creating missing tenant records...');
     
     // Find all confirmed bookings
-    const confirmedBookings = await Booking.find({ status: 'confirmed' });
+    const confirmedBookings = await Booking.find({ 
+      status: 'confirmed',
+      isDeleted: { $ne: true }
+    });
     console.log(`Found ${confirmedBookings.length} confirmed bookings`);
     
     const results = {
@@ -2699,7 +3209,10 @@ const createMissingTenantRecords = async (req, res) => {
     for (const booking of confirmedBookings) {
       try {
         // Check if tenant record already exists
-        const existingTenant = await Tenant.findOne({ bookingId: booking._id });
+        const existingTenant = await Tenant.findOne({ 
+          bookingId: booking._id,
+          isDeleted: { $ne: true }
+        });
         
         if (existingTenant) {
           results.existing++;
@@ -2798,7 +3311,10 @@ const getOwnerTenants = async (req, res) => {
       query.status = status;
     }
 
-    const tenants = await Tenant.find(query).sort({ createdAt: -1 });
+    const tenants = await Tenant.find({
+      ...query,
+      isDeleted: { $ne: true }
+    }).sort({ createdAt: -1 });
 
     return res.json({
       success: true,
@@ -2821,7 +3337,11 @@ const getPropertyTenants = async (req, res) => {
       return res.status(401).json({ success: false, message: 'Unauthorized' });
     }
 
-    const tenants = await Tenant.find({ propertyId, ownerId }).sort({ createdAt: -1 });
+    const tenants = await Tenant.find({ 
+      propertyId, 
+      ownerId,
+      isDeleted: { $ne: true }
+    }).sort({ createdAt: -1 });
 
     return res.json({
       success: true,
@@ -2846,7 +3366,7 @@ const getTenantDetails = async (req, res) => {
 
     const tenant = await Tenant.findById(tenantId);
     
-    if (!tenant) {
+    if (!tenant || tenant.isDeleted) {
       return res.status(404).json({ success: false, message: 'Tenant not found' });
     }
 
@@ -2874,7 +3394,10 @@ const getUserTenantRecords = async (req, res) => {
       return res.status(401).json({ success: false, message: 'Unauthorized' });
     }
 
-    const tenants = await Tenant.find({ userId }).sort({ createdAt: -1 });
+    const tenants = await Tenant.find({ 
+      userId,
+      isDeleted: { $ne: true }
+    }).sort({ createdAt: -1 });
 
     return res.json({
       success: true,
@@ -2900,7 +3423,7 @@ const updateTenantDetails = async (req, res) => {
 
     const tenant = await Tenant.findById(tenantId);
     
-    if (!tenant) {
+    if (!tenant || tenant.isDeleted) {
       return res.status(404).json({ success: false, message: 'Tenant not found' });
     }
 
@@ -2954,7 +3477,7 @@ const markTenantCheckIn = async (req, res) => {
 
     const tenant = await Tenant.findById(tenantId);
     
-    if (!tenant) {
+    if (!tenant || tenant.isDeleted) {
       return res.status(404).json({ success: false, message: 'Tenant not found' });
     }
 
@@ -2989,7 +3512,7 @@ const markTenantCheckOut = async (req, res) => {
 
     const tenant = await Tenant.findById(tenantId);
     
-    if (!tenant) {
+    if (!tenant || tenant.isDeleted) {
       return res.status(404).json({ success: false, message: 'Tenant not found' });
     }
 
@@ -3008,6 +3531,119 @@ const markTenantCheckOut = async (req, res) => {
     });
   } catch (error) {
     console.error('Mark tenant check-out error:', error);
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
+// Mark user's own check-in date (for seekers)
+const markUserCheckIn = async (req, res) => {
+  try {
+    const { bookingId } = req.params;
+    const { checkInDate } = req.body;
+    const userId = req.user?.id;
+    
+    if (!userId) {
+      return res.status(401).json({ success: false, message: 'Unauthorized' });
+    }
+
+    if (!checkInDate) {
+      return res.status(400).json({ success: false, message: 'Check-in date is required' });
+    }
+
+    // Find the booking
+    const booking = await Booking.findById(bookingId);
+    
+    if (!booking || booking.isDeleted) {
+      return res.status(404).json({ success: false, message: 'Booking not found' });
+    }
+
+    if (String(booking.userId) !== String(userId)) {
+      return res.status(403).json({ success: false, message: 'Forbidden' });
+    }
+
+    if (booking.status !== 'confirmed') {
+      return res.status(400).json({ success: false, message: 'Only confirmed bookings can be checked in' });
+    }
+
+    // Find or create tenant record
+    let tenant = await Tenant.findOne({ 
+      bookingId: booking._id,
+      isDeleted: { $ne: true }
+    });
+    
+    if (!tenant) {
+      // Create tenant record if it doesn't exist
+      const property = await Property.findById(booking.propertyId);
+      const room = await Room.findById(booking.roomId);
+      
+      // Fetch owner details from user service
+      let ownerDetails = {
+        name: booking.ownerName || 'Owner',
+        email: '',
+        phone: ''
+      };
+      
+      try {
+        const userServiceUrl = process.env.USER_SERVICE_URL || 'http://localhost:4002/api';
+        const ownerResponse = await axios.get(`${userServiceUrl}/public/user/${booking.ownerId}`);
+        if (ownerResponse.data) {
+          ownerDetails = {
+            name: ownerResponse.data.name || 'Owner',
+            email: ownerResponse.data.email || '',
+            phone: ownerResponse.data.phone || ownerResponse.data.phoneNumber || ''
+          };
+        }
+      } catch (err) {
+        console.error('Error fetching owner details:', err.message);
+      }
+      
+      tenant = new Tenant({
+        userId: booking.userId,
+        userName: booking.userSnapshot?.name || 'User',
+        userEmail: booking.userSnapshot?.email || '',
+        userPhone: booking.userSnapshot?.phone || '',
+        propertyId: booking.propertyId,
+        propertyName: property?.property_name || booking.propertySnapshot?.name || 'Property',
+        roomId: booking.roomId,
+        roomNumber: room?.room_number?.toString() || booking.roomSnapshot?.roomNumber?.toString() || 'N/A',
+        ownerId: booking.ownerId,
+        ownerName: ownerDetails.name,
+        ownerEmail: ownerDetails.email,
+        ownerPhone: ownerDetails.phone,
+        bookingId: booking._id,
+        paymentId: booking.payment?.razorpayPaymentId,
+        razorpayOrderId: booking.payment?.razorpayOrderId,
+        razorpayPaymentId: booking.payment?.razorpayPaymentId,
+        amountPaid: booking.payment?.totalAmount || 0,
+        checkInDate: new Date(checkInDate),
+        checkOutDate: null,
+        monthlyRent: booking.payment?.monthlyRent || room?.rent || 0,
+        securityDeposit: booking.payment?.securityDeposit || 0,
+        status: 'active',
+        confirmedBy: booking.approvedBy || booking.ownerId,
+        confirmedAt: booking.approvedAt || booking.createdAt,
+        specialRequests: '',
+      });
+    } else {
+      // Update existing tenant record
+      tenant.checkInDate = new Date(checkInDate);
+      tenant.status = 'active';
+    }
+
+    await tenant.save();
+
+    // Also update the booking record with check-in date
+    booking.checkInDate = new Date(checkInDate);
+    await booking.save();
+
+    return res.json({
+      success: true,
+      message: 'Check-in date marked successfully',
+      tenant,
+      booking
+    });
+  } catch (error) {
+    console.error('Mark user check-in error:', error);
     return res.status(500).json({ success: false, message: 'Internal server error' });
   }
 };
@@ -3046,7 +3682,8 @@ const getRoomTenants = async (req, res) => {
     // Determine tenants by approved/confirmed bookings for this room
     const approvedBookings = await Booking.find({
       roomId: String(roomId),
-      status: { $in: ['confirmed', 'approved'] }
+      status: { $in: ['confirmed', 'approved'] },
+      isDeleted: { $ne: true }
     }).sort({ createdAt: -1 }).limit(50);
 
     // Enrich tenants with age and occupation from user-service
@@ -3106,6 +3743,78 @@ const getRoomTenants = async (req, res) => {
   }
 };
 
+// Check and update room occupancy status
+const updateRoomOccupancyStatus = async (roomId) => {
+  try {
+    const room = await Room.findById(roomId);
+    if (!room) {
+      console.log(`Room ${roomId} not found`);
+      return;
+    }
+
+    // Count active tenants for this room
+    const activeTenantsCount = await Tenant.countDocuments({
+      roomId: roomId,
+      status: 'active',
+      isDeleted: { $ne: true }
+    });
+
+    console.log(`Room ${roomId} (${room.room_number}): ${activeTenantsCount}/${room.occupancy} tenants`);
+
+    // Update room status based on occupancy
+    let newRoomStatus = 'available';
+    if (room.status === 'maintenance') {
+      newRoomStatus = 'maintenance';
+    } else if (activeTenantsCount >= room.occupancy) {
+      newRoomStatus = 'full';
+    } else {
+      newRoomStatus = 'available';
+    }
+
+    // Update room status if it has changed
+    if (room.room_status !== newRoomStatus) {
+      await Room.findByIdAndUpdate(roomId, { 
+        room_status: newRoomStatus,
+        is_available: newRoomStatus === 'available' && room.status === 'active'
+      });
+      console.log(`✅ Room ${roomId} status updated: ${room.room_status} → ${newRoomStatus}`);
+    }
+
+    return {
+      roomId,
+      roomNumber: room.room_number,
+      occupancy: room.occupancy,
+      currentTenants: activeTenantsCount,
+      roomStatus: newRoomStatus,
+      isAvailable: newRoomStatus === 'available' && room.status === 'active'
+    };
+  } catch (error) {
+    console.error(`Error updating room occupancy for room ${roomId}:`, error);
+    throw error;
+  }
+};
+
+// Update all rooms occupancy status for a property
+const updatePropertyRoomsOccupancy = async (propertyId) => {
+  try {
+    const rooms = await Room.find({ property_id: propertyId });
+    const results = [];
+
+    for (const room of rooms) {
+      const result = await updateRoomOccupancyStatus(room._id);
+      if (result) {
+        results.push(result);
+      }
+    }
+
+    console.log(`✅ Updated occupancy status for ${results.length} rooms in property ${propertyId}`);
+    return results;
+  } catch (error) {
+    console.error(`Error updating property rooms occupancy for property ${propertyId}:`, error);
+    throw error;
+  }
+};
+
 module.exports = {
   addProperty,
   getProperties,
@@ -3116,6 +3825,7 @@ module.exports = {
   updateRoomStatus,
   updateRoom,
   updateProperty,
+  updatePropertyStatus,
   uploadImage,
   getAllPropertiesAdmin,
   approveRoomAdmin,
@@ -3150,5 +3860,9 @@ module.exports = {
   updateTenantDetails,
   markTenantCheckIn,
   markTenantCheckOut,
-  getRoomTenants
+  markUserCheckIn,
+  getRoomTenants,
+  // Room occupancy management
+  updateRoomOccupancyStatus,
+  updatePropertyRoomsOccupancy
 };

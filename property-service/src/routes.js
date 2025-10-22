@@ -4,7 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const { createClient } = require('@supabase/supabase-js');
 const jwt = require('jsonwebtoken');
-const { addProperty, getProperties, getProperty, getPropertyAdmin, getApprovedPropertiesPublic, getApprovedPropertyPublic, updateRoomStatus, updateRoom, updateProperty, getAllPropertiesAdmin, approveRoomAdmin, approvePropertyAdmin, sendAdminMessage, getRoomPublic, getAllRoomsDebug, createBookingPublic, listOwnerBookings, getPendingApprovalBookings, checkUserBookingStatus, getUserBookings, getBookingDetails, getBookingDetailsPublic, getAllBookingsDebug, lookupBookingDetails, updateBookingStatus, cancelAndDeleteBooking, createPaymentOrder, verifyPaymentAndCreateBooking, addToFavorites, removeFromFavorites, getUserFavorites, checkFavoriteStatus, createMissingTenantRecords, getOwnerTenants, getPropertyTenants, getTenantDetails, getUserTenantRecords, updateTenantDetails, markTenantCheckIn, markTenantCheckOut, getRoomTenants } = require('./controller');
+const { addProperty, getProperties, getProperty, getPropertyAdmin, getApprovedPropertiesPublic, getApprovedPropertyPublic, updateRoomStatus, updateRoom, updateProperty, updatePropertyStatus, getAllPropertiesAdmin, approveRoomAdmin, approvePropertyAdmin, sendAdminMessage, getRoomPublic, getAllRoomsDebug, createBookingPublic, listOwnerBookings, getPendingApprovalBookings, checkUserBookingStatus, getUserBookings, getBookingDetails, getBookingDetailsPublic, getAllBookingsDebug, lookupBookingDetails, updateBookingStatus, cancelAndDeleteBooking, createPaymentOrder, verifyPaymentAndCreateBooking, addToFavorites, removeFromFavorites, getUserFavorites, checkFavoriteStatus, createMissingTenantRecords, getOwnerTenants, getPropertyTenants, getTenantDetails, getUserTenantRecords, updateTenantDetails, markTenantCheckIn, markTenantCheckOut, markUserCheckIn, getRoomTenants } = require('./controller');
 const axios = require('axios');
 
 const router = express.Router();
@@ -46,15 +46,8 @@ const authenticateUser = async (req, res, next) => {
     const authHeader = req.headers.authorization;
     const fallbackUserId = req.headers['x-user-id'];
 
-    console.log('=== AUTHENTICATION DEBUG ===');
-    console.log('Auth header:', authHeader);
-    console.log('Fallback user ID:', fallbackUserId);
-    console.log('JWT Secret available:', !!process.env.USER_JWT_SECRET);
-    console.log('JWT_SECRET available:', !!process.env.JWT_SECRET);
-
     // Prefer explicit Mongo user id if provided
     if (fallbackUserId) {
-      console.log('Using fallback user ID:', fallbackUserId);
       req.user = { id: String(fallbackUserId) };
       return next();
     }
@@ -63,23 +56,17 @@ const authenticateUser = async (req, res, next) => {
     if (authHeader && authHeader.startsWith('Bearer ')) {
       const token = authHeader.substring(7);
       const secret = process.env.USER_JWT_SECRET || process.env.JWT_SECRET || process.env.USER_SERVICE_JWT_SECRET;
-      console.log('Token received:', token.substring(0, 20) + '...');
-      console.log('Secret available:', !!secret);
       
       if (secret) {
         try {
           const payload = jwt.verify(token, secret);
-          console.log('JWT payload:', payload);
           const mongoId = payload?._id || payload?.id || payload?.userId || payload?.sub;
-          console.log('Mongo ID extracted:', mongoId);
           
           if (mongoId) {
             req.user = { id: String(mongoId) };
-            console.log('Authentication successful with Mongo ID:', mongoId);
             return next();
           }
         } catch (jwtError) {
-          console.log('JWT verification failed:', jwtError.message);
           // Ignore and continue to Supabase verification
         }
       }
@@ -196,6 +183,24 @@ const addPropertyUpload = multer({
   { name: 'documents', maxCount: 10 }
 ]);
 
+// Create a specific multer configuration for update property
+const updatePropertyUpload = multer({ 
+  storage: storage,
+  limits: { fileSize: 10 * 1024 * 1024 } // 10MB limit
+}).fields([
+  // Property images
+  { name: 'frontImage', maxCount: 1 },
+  { name: 'backImage', maxCount: 1 },
+  { name: 'hallImage', maxCount: 1 },
+  { name: 'kitchenImage', maxCount: 1 },
+  { name: 'galleryImages', maxCount: 20 },
+  
+  // Other images
+  { name: 'outsideToiletImage', maxCount: 1 },
+  { name: 'landTaxReceipt', maxCount: 1 },
+  { name: 'documents', maxCount: 10 }
+]);
+
 // Test authentication endpoint
 router.post('/test-auth', authenticateUser, (req, res) => {
   res.json({ 
@@ -230,7 +235,8 @@ const roomUpdateUpload = multer({
 router.patch('/rooms/:roomId', authenticateUser, roomUpdateUpload, updateRoom);
 
 // Property management routes
-router.patch('/properties/:id', authenticateUser, updateProperty);
+router.patch('/properties/:id', authenticateUser, updatePropertyUpload, updateProperty);
+router.patch('/properties/:id/status', authenticateUser, updatePropertyStatus);
 
 // Public routes (no authentication required)
 router.get('/public/properties', getApprovedPropertiesPublic);
@@ -270,8 +276,54 @@ router.get('/tenants/:tenantId', authenticateUser, getTenantDetails); // Get spe
 router.put('/tenants/:tenantId', authenticateUser, updateTenantDetails); // Update tenant details
 router.post('/tenants/:tenantId/check-in', authenticateUser, markTenantCheckIn); // Mark tenant as checked in
 router.post('/tenants/:tenantId/check-out', authenticateUser, markTenantCheckOut); // Mark tenant as checked out
+router.post('/bookings/:bookingId/check-in', authenticateUser, markUserCheckIn); // Mark user's own check-in date
 
 // Room tenant routes
 router.get('/rooms/:roomId/tenants', getRoomTenants); // Get tenants for specific room (public)
+
+// Room occupancy management routes
+router.post('/rooms/:roomId/update-occupancy', authenticateUser, async (req, res) => {
+  try {
+    const { roomId } = req.params;
+    const { updateRoomOccupancyStatus } = require('./controller');
+    
+    const result = await updateRoomOccupancyStatus(roomId);
+    
+    res.json({
+      success: true,
+      message: 'Room occupancy status updated',
+      data: result
+    });
+  } catch (error) {
+    console.error('Error updating room occupancy:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update room occupancy',
+      error: error.message
+    });
+  }
+});
+
+router.post('/properties/:propertyId/update-all-occupancy', authenticateUser, async (req, res) => {
+  try {
+    const { propertyId } = req.params;
+    const { updatePropertyRoomsOccupancy } = require('./controller');
+    
+    const results = await updatePropertyRoomsOccupancy(propertyId);
+    
+    res.json({
+      success: true,
+      message: 'All room occupancy statuses updated',
+      data: results
+    });
+  } catch (error) {
+    console.error('Error updating property rooms occupancy:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update property rooms occupancy',
+      error: error.message
+    });
+  }
+});
 
 module.exports = router;
